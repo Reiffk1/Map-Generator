@@ -273,6 +273,22 @@ const normalizeMap = (source: MapRecord): MapRecord => {
   const map = deepClone(source);
   map.layers = map.layers?.length ? map.layers : createDefaultLayers(map.id);
   map.view = { ...createDefaultView(), ...map.view };
+  map.view.floorSurfaceStyle =
+    map.view.floorSurfaceStyle === 'stonekeep' ||
+    map.view.floorSurfaceStyle === 'parchment_blueprint' ||
+    map.view.floorSurfaceStyle === 'pixel_dungeon'
+      ? map.view.floorSurfaceStyle
+      : map.view.floorSurfaceStyle === 'parchment'
+        ? 'parchment_blueprint'
+        : map.view.floorSurfaceStyle === 'slate'
+          ? 'pixel_dungeon'
+          : 'stonekeep';
+  map.view.renderMode = map.view.renderMode === 'preview_3d' ? 'preview_3d' : 'editor_2d';
+  map.view.lightPreset =
+    map.view.lightPreset === 'moonlit' || map.view.lightPreset === 'neutral' || map.view.lightPreset === 'torch'
+      ? map.view.lightPreset
+      : 'torch';
+  map.view.hasUserAdjusted = Boolean(map.view.hasUserAdjusted);
   map.style = map.style === 'graph' || map.style === 'hybrid' || map.style === 'floorplan' ? map.style : 'floorplan';
   map.floorRooms = map.floorRooms?.length ? map.floorRooms : (map.rooms ?? []).map((room) => roomFromLegacy(map, room));
   map.corridors = map.corridors?.length ? map.corridors : (map.paths ?? []).map((path) => corridorFromLegacy(map, path));
@@ -624,7 +640,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   updateProjectMeta: (patch) => applyWorkspaceChange(set, get, (_workspace, project) => Object.assign(project, patch, { updatedAt: now() })),
   updateActiveMapMeta: (patch) => applyWorkspaceChange(set, get, (_workspace, _project, map) => Object.assign(map, patch)),
   updateMapView: (patch) => applyWorkspaceViewChange(set, get, (_workspace, _project, map) => {
-    map.view = { ...map.view, ...patch };
+    const touchedView = typeof patch.zoom === 'number' || Boolean(patch.pan);
+    map.view = {
+      ...map.view,
+      ...patch,
+      hasUserAdjusted: patch.hasUserAdjusted ?? (touchedView ? true : map.view.hasUserAdjusted),
+    };
   }),
   createProject: (template = 'blank') =>
     applyWorkspaceChange(set, get, (workspace) => {

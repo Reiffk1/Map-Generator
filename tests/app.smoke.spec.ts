@@ -46,6 +46,7 @@ async function assertRuntimeHealth(page: Page, runtime: RuntimeTracker) {
     'mode-navigate',
     'fit-map-button',
     'top-search',
+    'toggle-3d-preview',
   ];
 
   for (const id of uniqueSelectorIds) {
@@ -138,17 +139,25 @@ test('supports explorer search, review flows, and inspector editing', async ({ p
   await expect(page.getByText('Revisit Planner')).toBeVisible();
 
   await page.getByTestId('map-item-map_sump_tunnels').click();
-  await expect(page.getByTestId('map-canvas')).toContainText('Sump Tunnels');
+  await expect(page.locator('.canvas-meta-strip')).toContainText('Sump Tunnels');
 
   await page.getByTestId('inspector-tab-map').click();
   await page.getByTestId('map-name-field').fill('Sump Tunnels Revised');
   await page.getByTestId('map-grid-size-field').fill('56');
-  await expect(page.getByTestId('map-canvas')).toContainText('Sump Tunnels Revised');
+  await expect(page.locator('.canvas-meta-strip')).toContainText('Sump Tunnels Revised');
 
   await page.locator('[data-testid^="transition-hotspot-"]').first().click();
   await page.getByTestId('inspector-tab-selection').click();
   await page.getByLabel('Transition').fill('Exit Revised');
   await expect(page.getByLabel('Select Exit Revised')).toBeVisible();
+
+  await page.getByTestId('topbar-more-menu').click();
+  await page.getByTestId('toggle-3d-preview').click();
+  await expect(page.getByTestId('map-3d-canvas')).toBeVisible();
+  await expect(page).toHaveScreenshot('cinematic-preview-open.png');
+  await page.getByTestId('topbar-more-menu').click();
+  await page.getByTestId('toggle-3d-preview').click();
+  await expect(page.getByTestId('fit-map-button')).toBeVisible();
 
   await assertRuntimeHealth(page, runtime);
 });

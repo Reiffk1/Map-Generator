@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160" shape-rendering="crispEdges">
+  <defs>
+    <pattern id="pixel-corridor" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#b8a68e"/>
+      <rect x="0" y="0" width="6" height="6" fill="#9a886f"/>
+      <rect x="6" y="6" width="6" height="6" fill="#9a886f"/>
+      <rect x="6" y="0" width="6" height="6" fill="#c9b89f"/>
+      <rect x="0" y="6" width="6" height="6" fill="#c9b89f"/>
+    </pattern>
+  </defs>
+  <rect width="160" height="160" fill="url(#pixel-corridor)"/>
+</svg>

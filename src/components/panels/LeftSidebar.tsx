@@ -34,41 +34,21 @@ export function LeftSidebar({
   return (
     <aside className="left-sidebar" data-testid="explorer-sidebar">
       <Panel className="project-card">
-        <div className="project-card__header">
-          <div>
-            <span className="section-eyebrow">Atlas</span>
-            <h2>{project.name}</h2>
-            <p>{project.gameTitle}</p>
-          </div>
-          <Badge>{project.maps.length} maps</Badge>
+        <div className="project-card__header project-card__header--compact">
+          <SectionTitle eyebrow="Explorer" title="Maps" />
+          <Badge>{project.maps.length}</Badge>
         </div>
-        <p className="project-card__notes">{project.playthroughNotes}</p>
         <div className="project-card__actions">
           <Button data-testid="new-map-button" onClick={onCreateMap}>New Map</Button>
-          <GhostButton onClick={onCreateSnapshot}>Snapshot</GhostButton>
-          <GhostButton data-testid="restart-tutorial-button" onClick={restartOnboarding}>Tutorial</GhostButton>
+          <GhostButton onClick={openReview}>Review</GhostButton>
         </div>
-        <div className="stat-grid">
-          <StatChip label="Completion" value={`${stats.completionAverage}%`} accent="#b99556" />
-          <StatChip label="Rooms" value={stats.roomCount} accent="#d9d1c4" />
-          <StatChip label="Open Links" value={stats.unlinkedTransitionCount} accent="#c47656" />
-          <StatChip label="Revisit" value={reviewItems.filter((item) => item.category === 'revisit_queue').length} accent="#a3927a" />
-        </div>
-        <div className="project-card__focus">
+        <div className="project-card__focus project-card__focus--slim">
           <div>
-            <span className="section-eyebrow">Review Queue</span>
-            <strong>
-              {highPriorityCount > 0
-                ? `${highPriorityCount} priority items need a pass`
-                : 'No urgent review issues are blocking this atlas'}
-            </strong>
+            <span className="section-eyebrow">Active Map</span>
+            <strong>{activeMap.name}</strong>
+            <p>{activeMap.region} / {activeMap.floor} / {activeMap.style}</p>
           </div>
-          <GhostButton onClick={openReview}>Open Review</GhostButton>
         </div>
-      </Panel>
-
-      <Panel>
-        <SectionTitle eyebrow="Explorer" title="Maps" />
         <div className="map-list">
           {project.maps.map((map) => (
             <div className={`map-list__row ${activeMap.id === map.id ? 'is-active' : ''}`} key={map.id}>
@@ -96,6 +76,43 @@ export function LeftSidebar({
             </div>
           ))}
         </div>
+      </Panel>
+
+      <Panel>
+        <details className="sidebar-accordion">
+          <summary>Project Summary</summary>
+          <div className="sidebar-accordion__body">
+            <div className="stat-grid">
+              <StatChip label="Completion" value={`${stats.completionAverage}%`} accent="#b99556" />
+              <StatChip label="Rooms" value={stats.roomCount} accent="#d9d1c4" />
+              <StatChip label="Open Links" value={stats.unlinkedTransitionCount} accent="#c47656" />
+              <StatChip label="Revisit" value={reviewItems.filter((item) => item.category === 'revisit_queue').length} accent="#a3927a" />
+            </div>
+            <p className="project-card__notes">{project.playthroughNotes}</p>
+          </div>
+        </details>
+        <details className="sidebar-accordion">
+          <summary>Review Queue</summary>
+          <div className="sidebar-accordion__body">
+            <strong>
+              {highPriorityCount > 0
+                ? `${highPriorityCount} priority items need a pass`
+                : 'No urgent review issues are blocking this atlas'}
+            </strong>
+            <div className="project-card__actions">
+              <GhostButton onClick={openReview}>Open Review</GhostButton>
+            </div>
+          </div>
+        </details>
+        <details className="sidebar-accordion">
+          <summary>Snapshots & Help</summary>
+          <div className="sidebar-accordion__body">
+            <div className="project-card__actions">
+              <GhostButton onClick={onCreateSnapshot}>Snapshot</GhostButton>
+              <GhostButton data-testid="restart-tutorial-button" onClick={restartOnboarding}>Tutorial</GhostButton>
+            </div>
+          </div>
+        </details>
       </Panel>
     </aside>
   );

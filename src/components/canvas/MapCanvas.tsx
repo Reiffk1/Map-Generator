@@ -1,4 +1,5 @@
 import {
+  useCallback,
   forwardRef,
   useEffect,
   useImperativeHandle,
@@ -46,51 +47,51 @@ const surfacePalette: Record<
     grid: string;
   }
 > = {
-  ash: {
-    stage: '#1a1e23',
-    backdrop: '#ddd6c8',
-    roomBase: '#ebe3d4',
-    roomInset: '#f6f1e8',
-    corridorFill: '#d1c7b7',
-    corridorEdge: '#a99d8b',
-    corridorCenter: 'rgba(80, 71, 60, 0.18)',
-    wallHighlight: 'rgba(255, 248, 236, 0.22)',
-    label: '#312b25',
-    labelMuted: '#72685b',
-    grid: 'rgba(85, 77, 68, 0.14)',
+  stonekeep: {
+    stage: '#0a0a0b',
+    backdrop: '#1a1614',
+    roomBase: '#3d3530',
+    roomInset: '#4a4038',
+    corridorFill: '#342e28',
+    corridorEdge: '#2a2420',
+    corridorCenter: 'rgba(20, 16, 12, 0.4)',
+    wallHighlight: 'rgba(255, 200, 160, 0.12)',
+    label: '#ddd4c8',
+    labelMuted: '#9a8e80',
+    grid: 'rgba(255, 200, 160, 0.06)',
   },
-  parchment: {
-    stage: '#181b20',
-    backdrop: '#e7dfd1',
-    roomBase: '#f3ece0',
-    roomInset: '#fbf7f0',
-    corridorFill: '#ddd3c1',
-    corridorEdge: '#b1a48f',
-    corridorCenter: 'rgba(88, 74, 56, 0.18)',
-    wallHighlight: 'rgba(255, 252, 245, 0.24)',
-    label: '#2f2922',
-    labelMuted: '#776b5c',
-    grid: 'rgba(102, 92, 77, 0.12)',
+  parchment_blueprint: {
+    stage: '#0b0a09',
+    backdrop: '#1c1814',
+    roomBase: '#403832',
+    roomInset: '#4d443c',
+    corridorFill: '#38302a',
+    corridorEdge: '#2c2620',
+    corridorCenter: 'rgba(22, 18, 14, 0.38)',
+    wallHighlight: 'rgba(255, 210, 170, 0.10)',
+    label: '#e0d6ca',
+    labelMuted: '#9c9084',
+    grid: 'rgba(255, 210, 170, 0.05)',
   },
-  slate: {
-    stage: '#15181c',
-    backdrop: '#d6d4ce',
-    roomBase: '#e4e0d7',
-    roomInset: '#efebe3',
-    corridorFill: '#c6c2b8',
-    corridorEdge: '#9a9386',
-    corridorCenter: 'rgba(68, 63, 56, 0.18)',
-    wallHighlight: 'rgba(255, 255, 255, 0.18)',
-    label: '#292620',
-    labelMuted: '#666056',
-    grid: 'rgba(73, 67, 60, 0.11)',
+  pixel_dungeon: {
+    stage: '#08080a',
+    backdrop: '#181412',
+    roomBase: '#3a322c',
+    roomInset: '#483e36',
+    corridorFill: '#302a24',
+    corridorEdge: '#26201a',
+    corridorCenter: 'rgba(18, 14, 10, 0.42)',
+    wallHighlight: 'rgba(255, 190, 140, 0.14)',
+    label: '#dad0c4',
+    labelMuted: '#968a7c',
+    grid: 'rgba(255, 190, 140, 0.07)',
   },
 };
 
 const wallPalette: Record<MapRecord['view']['wallStyle'], string> = {
-  stone: '#3e342c',
-  brick: '#574137',
-  ruin: '#6b6257',
+  stone: '#1e1816',
+  brick: '#2a201c',
+  ruin: '#3a322c',
 };
 
 const selectionStroke = '#b99556';
@@ -123,6 +124,78 @@ const transitionIcon: Record<TransitionRecord['transitionType'], string> = {
 };
 
 const boardMargin = 92;
+const dungeonTextures = {
+  stonekeep: {
+    room: '/assets/dungeon-core/stonekeep-room.svg',
+    corridor: '/assets/dungeon-core/stonekeep-corridor.svg',
+  },
+  parchment_blueprint: {
+    room: '/assets/dungeon-core/parchment-room.svg',
+    corridor: '/assets/dungeon-core/parchment-corridor.svg',
+  },
+  pixel_dungeon: {
+    room: '/assets/dungeon-core/pixel-room.svg',
+    corridor: '/assets/dungeon-core/pixel-corridor.svg',
+  },
+} as const;
+
+const createPatternImage = (
+  colors: { base: string; accent: string; crack?: string },
+  options: { pixel?: boolean } = {},
+) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 96;
+  canvas.height = 96;
+  const context = canvas.getContext('2d');
+  if (!context) return canvas;
+
+  context.fillStyle = colors.base;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const step = options.pixel ? 16 : 32;
+  context.strokeStyle = colors.accent;
+  context.globalAlpha = 0.25;
+  context.lineWidth = options.pixel ? 1.5 : 1;
+  for (let x = 0; x <= canvas.width; x += step) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, canvas.height);
+    context.stroke();
+  }
+  for (let y = 0; y <= canvas.height; y += step) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(canvas.width, y);
+    context.stroke();
+  }
+
+  context.globalAlpha = 0.08;
+  context.fillStyle = colors.accent;
+  for (let gx = 0; gx < canvas.width; gx += step) {
+    for (let gy = 0; gy < canvas.height; gy += step) {
+      const shade = ((gx * 7 + gy * 13) % 5) * 0.02;
+      context.globalAlpha = 0.04 + shade;
+      context.fillRect(gx + 1, gy + 1, step - 2, step - 2);
+    }
+  }
+
+  if (colors.crack) {
+    context.globalAlpha = 0.18;
+    context.strokeStyle = colors.crack;
+    context.lineWidth = options.pixel ? 1.2 : 0.8;
+    for (let index = 0; index < 6; index += 1) {
+      context.beginPath();
+      const sx = 8 + ((index * 17) % 80);
+      const sy = 4 + ((index * 23) % 80);
+      context.moveTo(sx, sy);
+      context.lineTo(sx + 8 + (index % 3) * 4, sy + 6 + (index % 2) * 5);
+      context.lineTo(sx + 3 + (index % 4) * 3, sy + 14 + (index % 3) * 4);
+      context.stroke();
+    }
+  }
+
+  return canvas;
+};
 
 export interface MapCanvasHandle {
   toDataUrl: () => string | undefined;
@@ -316,9 +389,16 @@ const MiniNavigator = ({ map }: { map: MapRecord }) => {
 export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; map: MapRecord }>(
   function MapCanvas({ map }, ref) {
     const stageRef = useRef<Konva.Stage | null>(null);
+    const grainRef = useRef<Konva.Rect | null>(null);
     const fittedMapsRef = useRef<Set<string>>(new Set());
     const { ref: containerRef, size } = useElementSize<HTMLDivElement>();
     const [backgroundImage] = useImage(map.background?.src ?? '', 'anonymous');
+    const [stonekeepRoomImage] = useImage(dungeonTextures.stonekeep.room, 'anonymous');
+    const [stonekeepCorridorImage] = useImage(dungeonTextures.stonekeep.corridor, 'anonymous');
+    const [parchmentRoomImage] = useImage(dungeonTextures.parchment_blueprint.room, 'anonymous');
+    const [parchmentCorridorImage] = useImage(dungeonTextures.parchment_blueprint.corridor, 'anonymous');
+    const [pixelRoomImage] = useImage(dungeonTextures.pixel_dungeon.room, 'anonymous');
+    const [pixelCorridorImage] = useImage(dungeonTextures.pixel_dungeon.corridor, 'anonymous');
     const [draftRect, setDraftRect] = useState<{ start: Point; current: Point } | null>(null);
     const [draftPath, setDraftPath] = useState<Point[]>([]);
     const [draftKind, setDraftKind] = useState<'corridor' | 'wall' | 'route' | 'sketch' | null>(null);
@@ -344,6 +424,40 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     const deleteEntity = useAppStore((state) => state.deleteEntity);
     const openMap = useAppStore((state) => state.openMap);
 
+    const roomPattern = useMemo(() => {
+      if (map.view.floorSurfaceStyle === 'parchment_blueprint') {
+        return createPatternImage({ base: '#f2e7d2', accent: '#d1bea3', crack: '#9e8a6f' });
+      }
+      if (map.view.floorSurfaceStyle === 'pixel_dungeon') {
+        return createPatternImage({ base: '#dac9af', accent: '#9b8a74', crack: '#7a6c5a' }, { pixel: true });
+      }
+      return createPatternImage({ base: '#e6d8c2', accent: '#b8a88e', crack: '#8f7f68' });
+    }, [map.view.floorSurfaceStyle]);
+
+    const corridorPattern = useMemo(() => {
+      if (map.view.floorSurfaceStyle === 'parchment_blueprint') {
+        return createPatternImage({ base: '#dcccb1', accent: '#beab8f' });
+      }
+      if (map.view.floorSurfaceStyle === 'pixel_dungeon') {
+        return createPatternImage({ base: '#b8a68e', accent: '#8b7a64' }, { pixel: true });
+      }
+      return createPatternImage({ base: '#cab89d', accent: '#9f8b72' });
+    }, [map.view.floorSurfaceStyle]);
+    const roomPatternData = useMemo(() => roomPattern.toDataURL(), [roomPattern]);
+    const corridorPatternData = useMemo(() => corridorPattern.toDataURL(), [corridorPattern]);
+    const [roomPatternImage] = useImage(roomPatternData);
+    const [corridorPatternImage] = useImage(corridorPatternData);
+    const skinRoomTexture = useMemo(() => {
+      if (map.view.floorSurfaceStyle === 'parchment_blueprint') return parchmentRoomImage;
+      if (map.view.floorSurfaceStyle === 'pixel_dungeon') return pixelRoomImage;
+      return stonekeepRoomImage;
+    }, [map.view.floorSurfaceStyle, parchmentRoomImage, pixelRoomImage, stonekeepRoomImage]);
+    const skinCorridorTexture = useMemo(() => {
+      if (map.view.floorSurfaceStyle === 'parchment_blueprint') return parchmentCorridorImage;
+      if (map.view.floorSurfaceStyle === 'pixel_dungeon') return pixelCorridorImage;
+      return stonekeepCorridorImage;
+    }, [map.view.floorSurfaceStyle, parchmentCorridorImage, pixelCorridorImage, stonekeepCorridorImage]);
+
     const applyZoom = (nextZoom: number) => {
       const centerWorld = {
         x: (size.width / 2 - map.view.pan.x) / map.view.zoom,
@@ -358,7 +472,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       });
     };
 
-    const fitToMap = () => {
+    const fitToMap = useCallback((preserveAuto = false) => {
       if (!size.width || !size.height) return;
       const bounds = getMapContentBounds(map);
       const padding = 120;
@@ -373,8 +487,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           x: (size.width - bounds.width * nextZoom) / 2 - bounds.x * nextZoom,
           y: (size.height - bounds.height * nextZoom) / 2 - bounds.y * nextZoom,
         },
+        hasUserAdjusted: preserveAuto ? false : true,
       });
-    };
+    }, [map, size.height, size.width, updateMapView]);
 
     useImperativeHandle(ref, () => ({
       toDataUrl: () => stageRef.current?.toDataURL({ pixelRatio: 2 }),
@@ -405,13 +520,27 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     useEffect(() => {
       if (!size.width || !size.height) return;
       if (fittedMapsRef.current.has(map.id)) return;
+      if (map.view.hasUserAdjusted) {
+        fittedMapsRef.current.add(map.id);
+        return;
+      }
       if (map.view.zoom !== 1 || map.view.pan.x !== 0 || map.view.pan.y !== 0) {
         fittedMapsRef.current.add(map.id);
         return;
       }
-      fitToMap();
+      updateMapView({ hasUserAdjusted: false });
+      fitToMap(true);
       fittedMapsRef.current.add(map.id);
-    }, [map.id, map.view.pan.x, map.view.pan.y, map.view.zoom, size.height, size.width]);
+    }, [fitToMap, map.id, map.view.hasUserAdjusted, map.view.pan.x, map.view.pan.y, map.view.zoom, size.height, size.width, updateMapView]);
+
+    useEffect(() => {
+      const node = grainRef.current;
+      if (!node) return;
+      node.cache({ pixelRatio: 1 });
+      node.filters([Konva.Filters.Noise]);
+      node.noise(0.16);
+      node.getLayer()?.batchDraw();
+    }, [map.id, map.view.floorSurfaceStyle]);
 
     const getWorldPosition = () => {
       const stage = stageRef.current;
@@ -436,6 +565,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       options?: { destinationMapId?: string; destinationAnchorId?: string },
     ) => (event?: KonvaEventObject<MouseEvent>) => {
       if (activeTool === 'erase') {
+        if (kind === 'wall' && toolSettings.eraseMode === 'entity') {
+          const roomMatch = id.match(/(.+)_(n|e|s|w)$/);
+          if (roomMatch && map.floorRooms.some((room) => room.id === roomMatch[1])) {
+            deleteEntity('floor_room', roomMatch[1]);
+            return;
+          }
+        }
         deleteEntity(kind, id);
         return;
       }
@@ -587,10 +723,14 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       if (activeTool === 'marker') return 'Drop hazard, loot, secret, or save markers over the floorplan.';
       if (activeTool === 'route') return 'Paint a red route overlay to mark confirmed exploration paths.';
       if (activeTool === 'sketch') return 'Freehand red-ink markup for theory crafting and route notes.';
-      if (activeTool === 'erase') return 'Click a selected canvas entity to remove it.';
+      if (activeTool === 'erase') {
+        return toolSettings.eraseMode === 'segment'
+          ? 'Click specific segments and primitives to remove them.'
+          : 'Click any object (or room wall) to remove the whole entity.';
+      }
       if (editorMode === 'navigate') return 'Use linked doorway hotspots to jump between maps.';
       return 'Select, pan, inspect, and annotate the active floorplan.';
-    }, [activeTool, editorMode, toolSettings.roomPlacement]);
+    }, [activeTool, editorMode, toolSettings.eraseMode, toolSettings.roomPlacement]);
 
     const showHotspots = activeTool === 'select' || editorMode === 'navigate';
     const surfaceStyle = surfacePalette[map.view.floorSurfaceStyle];
@@ -598,9 +738,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
 
     const doorwayStroke = (doorway: MapRecord['doorways'][number], isSelected: boolean) => {
       if (isSelected) return selectionStroke;
-      if (doorway.doorwayState === 'locked') return '#a66e4d';
-      if (doorway.doorwayState === 'hidden' || doorway.doorwayState === 'suspected') return '#8e6e80';
-      return wallTone;
+      if (doorway.doorwayState === 'locked') return '#8a5a3a';
+      if (doorway.doorwayState === 'hidden' || doorway.doorwayState === 'suspected') return '#6e5040';
+      return '#5c3d28';
     };
 
     const doorwayLabelPosition = (orientation: MapRecord['doorways'][number]['orientation']) => {
@@ -637,10 +777,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
               cornerRadius={48}
               fill={surfaceStyle.backdrop}
               opacity={0.99}
-              stroke="rgba(72, 60, 45, 0.18)"
-              strokeWidth={3}
-              shadowBlur={24}
-              shadowColor="rgba(0, 0, 0, 0.18)"
+              stroke="rgba(255, 200, 160, 0.06)"
+              strokeWidth={2}
+              shadowBlur={32}
+              shadowColor="rgba(0, 0, 0, 0.5)"
             />
             {backgroundImage && map.background ? (
               <KonvaImage
@@ -682,6 +822,16 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                   />
                 ))
               : null}
+            <Rect
+              ref={grainRef}
+              x={boardMargin}
+              y={boardMargin}
+              width={virtualSize.width - boardMargin * 2}
+              height={virtualSize.height - boardMargin * 2}
+              cornerRadius={48}
+              fill="rgba(0,0,0,0.12)"
+              opacity={map.view.floorSurfaceStyle === 'pixel_dungeon' ? 0.18 : 0.1}
+            />
           </Layer>
 
           <Layer>
@@ -703,25 +853,27 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                     <Line
                       points={corridor.points.flatMap((point) => [point.x, point.y])}
                       stroke={wallTone}
-                      strokeWidth={corridor.width + 22}
+                      strokeWidth={corridor.width + 28}
                       lineCap="round"
                       lineJoin="round"
-                      opacity={0.96}
+                      opacity={1}
                     />
                     <Line
                       points={corridor.points.flatMap((point) => [point.x, point.y])}
                       stroke={surfaceStyle.corridorEdge}
-                      strokeWidth={corridor.width + 10}
+                      strokeWidth={corridor.width + 14}
                       lineCap="round"
                       lineJoin="round"
-                      opacity={0.65}
+                      opacity={0.85}
                     />
                     <Line
                       points={corridor.points.flatMap((point) => [point.x, point.y])}
                       stroke={surfaceStyle.corridorFill}
-                      strokeWidth={Math.max(16, corridor.width - 8)}
+                      strokeWidth={Math.max(16, corridor.width - 6)}
                       lineCap="round"
                       lineJoin="round"
+                      fillPatternImage={skinCorridorTexture ?? corridorPatternImage}
+                      fillPatternRepeat="repeat"
                       opacity={entityOpacity(corridor.state)}
                     />
                     <Line
@@ -752,11 +904,13 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                         width={room.bounds.width}
                         height={room.bounds.height}
                         cornerRadius={room.roomShape === 'octagon' ? 36 : 24}
+                        fillPatternImage={skinRoomTexture ?? roomPatternImage}
+                        fillPatternRepeat="repeat"
                         fill={surfaceStyle.roomBase}
                         stroke={isSelected ? selectionStroke : wallTone}
-                        strokeWidth={isSelected ? 4 : 3.4}
-                        shadowBlur={isSelected ? 22 : 12}
-                        shadowColor="rgba(0,0,0,0.18)"
+                        strokeWidth={isSelected ? 6 : 7}
+                        shadowBlur={isSelected ? 30 : 24}
+                        shadowColor="rgba(0,0,0,0.55)"
                         opacity={entityOpacity(room.state)}
                       />
                       <Rect
@@ -766,7 +920,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                         height={room.bounds.height - 16}
                         cornerRadius={room.roomShape === 'octagon' ? 30 : 18}
                         fill={room.color}
-                        opacity={0.36}
+                        opacity={0.15}
                       />
                       <Rect
                         x={8}
@@ -775,8 +929,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                         height={room.bounds.height - 16}
                         cornerRadius={room.roomShape === 'octagon' ? 30 : 18}
                         stroke={isSelected ? selectionStroke : surfaceStyle.roomInset}
-                        strokeWidth={isSelected ? 3 : 2}
-                        opacity={0.78}
+                        strokeWidth={isSelected ? 3 : 1.5}
+                        opacity={0.4}
                       />
                       <Text x={18} y={16} text={room.label} fontFamily="Space Grotesk" fontSize={22} fontStyle="700" fill={surfaceStyle.label} />
                       {room.subtitle ? (
@@ -792,18 +946,33 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                   <Group key={wall.id}>
                     <Line
                       points={wall.points.flatMap((point) => [point.x, point.y])}
+                      stroke="rgba(0,0,0,0.35)"
+                      strokeWidth={wall.thickness * 1.5 + 4}
+                      lineCap="round"
+                      lineJoin="round"
+                    />
+                    <Line
+                      points={wall.points.flatMap((point) => [point.x, point.y])}
                       stroke={wallTone}
-                      strokeWidth={wall.thickness}
+                      strokeWidth={wall.thickness * 1.5}
                       lineCap="round"
                       lineJoin="round"
                       onClick={() => {
-                        if (activeTool === 'erase') deleteEntity('wall', wall.id);
+                        if (activeTool !== 'erase') return;
+                        if (toolSettings.eraseMode === 'entity') {
+                          const roomMatch = wall.id.match(/(.+)_(n|e|s|w)$/);
+                          if (roomMatch && map.floorRooms.some((room) => room.id === roomMatch[1])) {
+                            deleteEntity('floor_room', roomMatch[1]);
+                            return;
+                          }
+                        }
+                        deleteEntity('wall', wall.id);
                       }}
                     />
                     <Line
                       points={wall.points.flatMap((point) => [point.x, point.y])}
                       stroke={surfaceStyle.wallHighlight}
-                      strokeWidth={Math.max(2, wall.thickness * 0.16)}
+                      strokeWidth={Math.max(2, wall.thickness * 0.24)}
                       lineCap="round"
                       lineJoin="round"
                     />
@@ -835,7 +1004,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                       <Group rotation={doorwayRotation[doorway.orientation]}>
                         <Line
                           points={[-24, 0, 24, 0]}
-                          stroke={surfaceStyle.backdrop}
+                          stroke={surfaceStyle.roomBase}
                           strokeWidth={24}
                           lineCap="round"
                         />
@@ -1006,14 +1175,14 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                       width={240}
                       height={entry.collapsed ? 44 : 124}
                       cornerRadius={18}
-                      fill="#e5d5a4"
+                      fill="#3a3228"
                       opacity={0.96}
-                      stroke={selection.kind === 'note' && selection.ids.includes(entry.id) ? selectionStroke : 'rgba(58, 47, 29, 0.72)'}
+                      stroke={selection.kind === 'note' && selection.ids.includes(entry.id) ? selectionStroke : 'rgba(200, 170, 130, 0.25)'}
                       strokeWidth={2.4}
                     />
-                    <Text x={16} y={14} text={entry.title} fontFamily="Space Grotesk" fontSize={16} fill="#352d1f" />
+                    <Text x={16} y={14} text={entry.title} fontFamily="Space Grotesk" fontSize={16} fill="#ddd4c8" />
                     {!entry.collapsed ? (
-                      <Text x={16} y={42} width={208} height={70} text={entry.body} fontFamily="Inter Tight" fontSize={13} fill="#4a3f2e" />
+                      <Text x={16} y={42} width={208} height={70} text={entry.body} fontFamily="Inter Tight" fontSize={13} fill="#b0a494" />
                     ) : null}
                   </Group>
                 ))
@@ -1109,19 +1278,6 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           </Layer>
         </Stage>
 
-        <div className="canvas-header-overlay">
-          <div>
-            <strong>{map.name}</strong>
-            <span>{map.region} / {map.floor} / {map.style === 'graph' ? 'Route Graph' : map.style}</span>
-          </div>
-          <div className="canvas-chip-strip">
-            <span data-testid="map-room-count">{map.floorRooms.length} rooms</span>
-            <span data-testid="map-corridor-count">{map.corridors.length} corridors</span>
-            <span data-testid="map-door-count">{map.doorways.length} links</span>
-            <span>{Math.round(map.view.zoom * 100)}%</span>
-          </div>
-        </div>
-
         {map.view.showToolHints ? (
           <div className="canvas-hint-overlay">
             <span className="section-eyebrow">Tool Hint</span>
@@ -1132,7 +1288,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
         <div className="canvas-controls-overlay">
           <button aria-label="Zoom out canvas" data-testid="zoom-out-button" onClick={() => applyZoom(clamp(map.view.zoom / 1.12, 0.32, 3))} type="button">-</button>
           <button aria-label="Zoom in canvas" data-testid="zoom-in-button" onClick={() => applyZoom(clamp(map.view.zoom * 1.12, 0.32, 3))} type="button">+</button>
-          <button aria-label="Fit map to canvas" data-testid="fit-map-button" onClick={fitToMap} type="button">Fit</button>
+          <button aria-label="Fit map to canvas" data-testid="fit-map-button" onClick={() => fitToMap()} type="button">Fit</button>
           <button aria-label={map.view.showGrid ? 'Hide grid' : 'Show grid'} data-testid="toggle-grid-button" onClick={() => updateMapView({ showGrid: !map.view.showGrid })} type="button">
             {map.view.showGrid ? 'Grid' : 'No Grid'}
           </button>

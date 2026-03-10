@@ -461,6 +461,8 @@ export interface BackgroundReference {
 export interface MapViewSettings {
   zoom: number;
   pan: Point;
+  hasUserAdjusted: boolean;
+  renderMode: 'editor_2d' | 'preview_3d';
   showGrid: boolean;
   snapToGrid: boolean;
   gridSize: number;
@@ -476,9 +478,10 @@ export interface MapViewSettings {
   showToolHints: boolean;
   showLegacyGraph: boolean;
   showDoorLabels: boolean;
-  floorSurfaceStyle: 'ash' | 'parchment' | 'slate';
+  floorSurfaceStyle: 'stonekeep' | 'parchment_blueprint' | 'pixel_dungeon';
   wallStyle: 'stone' | 'brick' | 'ruin';
   overlayPreset: 'all' | 'exploration' | 'links';
+  lightPreset: 'torch' | 'moonlit' | 'neutral';
 }
 
 export interface MapRecord {
@@ -655,6 +658,7 @@ export interface ToolSettings {
   corridorWidth: number;
   transitionType: TransitionType;
   markerPreset: MarkerPlacementPreset;
+  eraseMode: 'entity' | 'segment';
 }
 
 export interface UiState {

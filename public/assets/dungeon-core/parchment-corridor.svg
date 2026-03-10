@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <defs>
+    <pattern id="parchment-corridor" width="24" height="24" patternUnits="userSpaceOnUse">
+      <rect width="24" height="24" fill="#dcccb1"/>
+      <path d="M0 12h24M12 0v24" stroke="#bca88a" stroke-width="0.8" opacity="0.55"/>
+      <path d="M0 3l8 3 8-2 8 2M0 18l8-3 8 2 8-2" stroke="#97805e" stroke-width="0.55" opacity="0.3" fill="none"/>
+    </pattern>
+  </defs>
+  <rect width="160" height="160" fill="url(#parchment-corridor)"/>
+</svg>

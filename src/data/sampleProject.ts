@@ -39,6 +39,8 @@ export const createDefaultLayers = (mapId: string): LayerRecord[] => [
 export const createDefaultView = (): MapViewSettings => ({
   zoom: 1,
   pan: { x: 0, y: 0 },
+  hasUserAdjusted: false,
+  renderMode: 'editor_2d',
   showGrid: true,
   snapToGrid: true,
   gridSize: 48,
@@ -54,9 +56,10 @@ export const createDefaultView = (): MapViewSettings => ({
   showToolHints: true,
   showLegacyGraph: false,
   showDoorLabels: true,
-  floorSurfaceStyle: 'ash',
+  floorSurfaceStyle: 'stonekeep',
   wallStyle: 'stone',
   overlayPreset: 'all',
+  lightPreset: 'torch',
 });
 
 const floorRoom = (mapId: string, input: Partial<FloorRoom> & Pick<FloorRoom, 'id' | 'label' | 'bounds'>): FloorRoom => ({

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <defs>
+    <pattern id="parchment" width="40" height="40" patternUnits="userSpaceOnUse">
+      <rect width="40" height="40" fill="#f0e4cf"/>
+      <path d="M0 20h40M20 0v40" stroke="#ccb898" stroke-width="0.8" opacity="0.45"/>
+      <ellipse cx="12" cy="9" rx="6" ry="3" fill="#d8c5a5" opacity="0.2"/>
+      <ellipse cx="28" cy="24" rx="7" ry="4" fill="#c7b28f" opacity="0.18"/>
+      <path d="M4 31l8-5 7 3 8-6 9 4" stroke="#9f8b69" stroke-width="0.6" opacity="0.3" fill="none"/>
+    </pattern>
+  </defs>
+  <rect width="160" height="160" fill="url(#parchment)"/>
+</svg>

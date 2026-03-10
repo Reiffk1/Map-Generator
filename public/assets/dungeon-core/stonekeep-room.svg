@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <defs>
+    <pattern id="stone" width="32" height="32" patternUnits="userSpaceOnUse">
+      <rect width="32" height="32" fill="#e3d4bf"/>
+      <path d="M0 8h32M0 16h32M0 24h32M8 0v32M16 0v32M24 0v32" stroke="#b9a88f" stroke-width="0.9" opacity="0.72"/>
+      <path d="M4 4l8 5-5 7M19 10l9 6-6 8M7 22l6 5M23 24l7 4" stroke="#8e7c65" stroke-width="0.75" opacity="0.34" fill="none"/>
+    </pattern>
+  </defs>
+  <rect width="160" height="160" fill="url(#stone)"/>
+</svg>

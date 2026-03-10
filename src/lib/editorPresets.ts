@@ -107,6 +107,7 @@ export const defaultToolSettings: ToolSettings = {
   corridorWidth: 72,
   transitionType: 'door',
   markerPreset: 'hazard',
+  eraseMode: 'entity',
 };
 
 export const getRoomTypeDefinition = (roomType: FloorRoomType) =>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <defs>
+    <pattern id="corridor-stone" width="20" height="20" patternUnits="userSpaceOnUse">
+      <rect width="20" height="20" fill="#cab89d"/>
+      <path d="M0 10h20M10 0v20" stroke="#a18d73" stroke-width="0.8" opacity="0.78"/>
+      <circle cx="4" cy="4" r="0.8" fill="#8a775f" opacity="0.45"/>
+      <circle cx="14" cy="15" r="0.9" fill="#8a775f" opacity="0.42"/>
+    </pattern>
+  </defs>
+  <rect width="160" height="160" fill="url(#corridor-stone)"/>
+</svg>

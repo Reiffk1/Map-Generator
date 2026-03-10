@@ -125,10 +125,6 @@ export function RightSidebar({
           {[
             ['selection', 'Selection'],
             ['map', 'Map'],
-            ['layers', 'Layers'],
-            ['links', 'Links'],
-            ['notes', 'Notes'],
-            ['help', 'Help'],
           ].map(([value, label]) => (
             <button
               key={value}
@@ -140,6 +136,34 @@ export function RightSidebar({
               {label}
             </button>
           ))}
+          <details className={`menu-dropdown inspector-tabs__advanced ${
+            ['layers', 'links', 'notes', 'help'].includes(inspectorTab) ? 'is-active' : ''
+          }`}>
+            <summary className="menu-dropdown__trigger">
+              <span>Advanced</span>
+            </summary>
+            <div className="menu-dropdown__panel">
+              {[
+                ['layers', 'Layers'],
+                ['links', 'Links'],
+                ['notes', 'Notes'],
+                ['help', 'Help'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className="menu-dropdown__item"
+                  onClick={(event) => {
+                    setInspectorTab(value as typeof inspectorTab);
+                    const details = event.currentTarget.closest('details');
+                    if (details instanceof HTMLDetailsElement) details.open = false;
+                  }}
+                  type="button"
+                >
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </details>
         </div>
       </Panel>
 
@@ -409,6 +433,10 @@ export function RightSidebar({
               </div>
             </InspectorGroup>
             <InspectorGroup title="View Defaults">
+              <SelectField label="Render Mode" value={map.view.renderMode} onChange={(event) => updateMapView({ renderMode: event.target.value as typeof map.view.renderMode })}>
+                <option value="editor_2d">2D Editor</option>
+                <option value="preview_3d">3D Preview</option>
+              </SelectField>
               <div className="field-row">
                 <TextField
                   data-testid="map-grid-size-field"
@@ -418,9 +446,9 @@ export function RightSidebar({
                   onChange={(event) => updateMapView({ gridSize: Number(event.target.value) || 48 })}
                 />
                 <SelectField label="Surface" value={map.view.floorSurfaceStyle} onChange={(event) => updateMapView({ floorSurfaceStyle: event.target.value as typeof map.view.floorSurfaceStyle })}>
-                  <option value="ash">Ash</option>
-                  <option value="parchment">Bone</option>
-                  <option value="slate">Slate</option>
+                  <option value="stonekeep">Stonekeep</option>
+                  <option value="parchment_blueprint">Parchment Blueprint</option>
+                  <option value="pixel_dungeon">Pixel Dungeon</option>
                 </SelectField>
               </div>
               <div className="field-row">
@@ -429,6 +457,13 @@ export function RightSidebar({
                   <option value="brick">Brick</option>
                   <option value="ruin">Ruin</option>
                 </SelectField>
+                <SelectField label="Lighting" value={map.view.lightPreset} onChange={(event) => updateMapView({ lightPreset: event.target.value as typeof map.view.lightPreset })}>
+                  <option value="torch">Torch</option>
+                  <option value="moonlit">Moonlit</option>
+                  <option value="neutral">Neutral</option>
+                </SelectField>
+              </div>
+              <div className="field-row">
                 <SelectField label="Overlay Preset" value={map.view.overlayPreset} onChange={(event) => updateMapView({ overlayPreset: event.target.value as typeof map.view.overlayPreset })}>
                   <option value="all">All</option>
                   <option value="exploration">Exploration</option>
