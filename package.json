@@ -1,0 +1,52 @@
+{
+  "name": "wayfinder-atelier",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:update": "npm run build && playwright test --update-snapshots",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/inter-tight": "^5.2.7",
+    "@fontsource/space-grotesk": "^5.2.10",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-sql": "^2.3.2",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.35.2",
+    "idb": "^8.0.3",
+    "jspdf": "^4.2.0",
+    "konva": "^10.2.0",
+    "nanoid": "^5.1.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-konva": "^19.2.3",
+    "react-resizable-panels": "^4.7.2",
+    "sonner": "^2.0.7",
+    "use-image": "^1.1.4",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.58.2",
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.48.0",
+    "vite": "^7.3.1"
+  }
+}
