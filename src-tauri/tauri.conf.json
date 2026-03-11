@@ -32,7 +32,9 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "../public/assets/dungeon-core/**/*"
+      "../public/assets/dungeon-core/**/*",
+      "../public/assets/tilesets/**/*",
+      "../public/assets/kenney/**/*"
     ],
     "icon": [
       "icons/32x32.png",

@@ -41,6 +41,8 @@ export const createDefaultView = (): MapViewSettings => ({
   pan: { x: 0, y: 0 },
   hasUserAdjusted: false,
   renderMode: 'editor_2d',
+  renderStyle2d: 'tile',
+  assetPackId: 'default-pixel',
   showGrid: true,
   snapToGrid: true,
   gridSize: 48,

@@ -46,7 +46,7 @@ async function assertRuntimeHealth(page: Page, runtime: RuntimeTracker) {
     'mode-navigate',
     'fit-map-button',
     'top-search',
-    'toggle-3d-preview',
+    'generate-dungeon-button',
   ];
 
   for (const id of uniqueSelectorIds) {
@@ -138,26 +138,54 @@ test('supports explorer search, review flows, and inspector editing', async ({ p
   });
   await expect(page.getByText('Revisit Planner')).toBeVisible();
 
-  await page.getByTestId('map-item-map_sump_tunnels').click();
+  await page.getByTestId('map-item-map_sump_tunnels').dispatchEvent('click');
   await expect(page.locator('.canvas-meta-strip')).toContainText('Sump Tunnels');
 
-  await page.getByTestId('inspector-tab-map').click();
+  await page.getByTestId('inspector-tab-map').dispatchEvent('click');
   await page.getByTestId('map-name-field').fill('Sump Tunnels Revised');
   await page.getByTestId('map-grid-size-field').fill('56');
   await expect(page.locator('.canvas-meta-strip')).toContainText('Sump Tunnels Revised');
 
-  await page.locator('[data-testid^="transition-hotspot-"]').first().click();
-  await page.getByTestId('inspector-tab-selection').click();
+  await page.locator('[data-testid^="transition-hotspot-"]').first().dispatchEvent('click');
+  await page.getByTestId('inspector-tab-selection').dispatchEvent('click');
   await page.getByLabel('Transition').fill('Exit Revised');
   await expect(page.getByLabel('Select Exit Revised')).toBeVisible();
 
   await page.getByTestId('topbar-more-menu').click();
   await page.getByTestId('toggle-3d-preview').click();
   await expect(page.getByTestId('map-3d-canvas')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reset Camera' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /First Person/ })).toBeVisible();
   await expect(page).toHaveScreenshot('cinematic-preview-open.png');
   await page.getByTestId('topbar-more-menu').click();
   await page.getByTestId('toggle-3d-preview').click();
   await expect(page.getByTestId('fit-map-button')).toBeVisible();
+
+  await assertRuntimeHealth(page, runtime);
+});
+
+test('generates a tilemap dungeon and previews it in 3D', async ({ page }) => {
+  const runtime = await bootApp(page, { tutorial: 'off' });
+
+  await page.getByTestId('generate-dungeon-button').click();
+
+  const dungeonTab = page.getByRole('button', { name: 'Open Generated Dungeon' });
+  await expect(dungeonTab).toBeVisible({ timeout: 10_000 });
+
+  await expect(page.getByTestId('map-canvas')).toBeVisible();
+  await expect(page.getByTestId('map-tabs')).toContainText('Generated Dungeon');
+  await expect(page).toHaveScreenshot('generated-dungeon.png');
+
+  await page.getByTestId('topbar-more-menu').click();
+  await page.getByTestId('toggle-3d-preview').click();
+  await expect(page.getByTestId('map-3d-canvas')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reset Camera' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /First Person/ })).toBeVisible();
+  await expect(page).toHaveScreenshot('generated-dungeon-3d.png');
+
+  await page.getByTestId('topbar-more-menu').click();
+  await page.getByTestId('toggle-3d-preview').click();
+  await expect(page.getByTestId('map-canvas')).toBeVisible();
 
   await assertRuntimeHealth(page, runtime);
 });

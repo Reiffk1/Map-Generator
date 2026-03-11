@@ -1,5 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { toast } from 'sonner';
+import { Group as PanelGroup, Panel as ResizablePanel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 
 import { SvgMapIcon } from '../data/iconLibrary';
 import { corridorWidthOptions, markerPresetOptions, roomPlacementOptions, roomTypeOptions, transitionOptions } from '../lib/editorPresets';
@@ -14,6 +15,13 @@ import { IconPickerModal } from '../components/panels/IconPickerModal';
 import { LeftSidebar } from '../components/panels/LeftSidebar';
 import { OnboardingModal } from '../components/panels/OnboardingModal';
 import { RightSidebar } from '../components/panels/RightSidebar';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '../components/ui/dropdown-menu';
 import { Button, GhostButton, Panel } from '../components/ui/primitives';
 import { useHotkeys } from '../hooks/useHotkeys';
 import { selectActiveMap, selectActiveProject, useAppStore } from '../store/useAppStore';
@@ -33,29 +41,27 @@ const readJsonFile = (file: File) =>
   });
 
 const modes = [
-  { value: 'floorplan', label: 'Draft', icon: 'floorplan' },
-  { value: 'graph', label: 'Route Graph', icon: 'graph' },
-  { value: 'ink', label: 'Annotate', icon: 'annotate' },
-  { value: 'portal', label: 'Links', icon: 'links' },
-  { value: 'navigate', label: 'Navigate', icon: 'navigate' },
-  { value: 'review', label: 'Review', icon: 'review' },
+  { value: 'floorplan', label: 'Draft', shortLabel: 'Draft', icon: 'floorplan' },
+  { value: 'graph', label: 'Route Graph', shortLabel: 'Graph', icon: 'graph' },
+  { value: 'ink', label: 'Annotate', shortLabel: 'Annotate', icon: 'annotate' },
+  { value: 'portal', label: 'Links', shortLabel: 'Links', icon: 'links' },
+  { value: 'navigate', label: 'Navigate', shortLabel: 'Travel', icon: 'navigate' },
+  { value: 'review', label: 'Review', shortLabel: 'Review', icon: 'review' },
 ] as const;
 
 const tools = [
-  { value: 'select', label: 'Select', icon: 'select' },
-  { value: 'floorRoom', label: 'Room', icon: 'room' },
-  { value: 'corridor', label: 'Corridor', icon: 'corridor' },
-  { value: 'wall', label: 'Wall', icon: 'wall' },
-  { value: 'doorway', label: 'Door', icon: 'door' },
-  { value: 'route', label: 'Path', icon: 'route' },
-  { value: 'marker', label: 'Overlay', icon: 'marker' },
-  { value: 'note', label: 'Note', icon: 'note' },
-  { value: 'sketch', label: 'Markup', icon: 'sketch' },
-  { value: 'erase', label: 'Erase', icon: 'erase' },
+  { value: 'select', label: 'Select', shortLabel: 'Select', icon: 'select' },
+  { value: 'floorRoom', label: 'Room', shortLabel: 'Room', icon: 'room' },
+  { value: 'corridor', label: 'Corridor', shortLabel: 'Corridor', icon: 'corridor' },
+  { value: 'wall', label: 'Wall', shortLabel: 'Wall', icon: 'wall' },
+  { value: 'doorway', label: 'Door', shortLabel: 'Door', icon: 'door' },
+  { value: 'route', label: 'Path', shortLabel: 'Path', icon: 'route' },
+  { value: 'marker', label: 'Overlay', shortLabel: 'Overlay', icon: 'marker' },
+  { value: 'note', label: 'Note', shortLabel: 'Note', icon: 'note' },
+  { value: 'sketch', label: 'Markup', shortLabel: 'Markup', icon: 'sketch' },
+  { value: 'erase', label: 'Erase', shortLabel: 'Erase', icon: 'erase' },
 ] as const;
 
-const primaryModeValues = new Set(['floorplan', 'navigate', 'review']);
-const primaryToolValues = new Set(['select', 'floorRoom', 'corridor', 'doorway', 'marker', 'note', 'erase']);
 const MapThreePreview = lazy(async () => {
   const module = await import('../components/canvas/MapThreePreview');
   return { default: module.MapThreePreview };
@@ -66,8 +72,6 @@ export function AppShell() {
 
   const canvasRef = useRef<MapCanvasHandle | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const [leftSidebarWidth, setLeftSidebarWidth] = useState(280);
-  const [rightSidebarWidth, setRightSidebarWidth] = useState(320);
   const [isCompactLayout, setIsCompactLayout] = useState(
     typeof window !== 'undefined' ? window.innerWidth <= 1120 : false,
   );
@@ -98,11 +102,13 @@ export function AppShell() {
   const createSnapshot = useAppStore((state) => state.createSnapshot);
   const importProject = useAppStore((state) => state.importProject);
   const markActiveMapReviewed = useAppStore((state) => state.markActiveMapReviewed);
+  const clearActiveMap = useAppStore((state) => state.clearActiveMap);
   const showLeftSidebar = useAppStore((state) => state.showLeftSidebar);
   const showRightSidebar = useAppStore((state) => state.showRightSidebar);
   const showBottomPanel = useAppStore((state) => state.showBottomPanel);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
   const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
+  const generateDungeon = useAppStore((state) => state.generateDungeon);
   const routePlannerStart = useAppStore((state) => state.routePlannerStart);
   const routePlannerEnd = useAppStore((state) => state.routePlannerEnd);
 
@@ -111,12 +117,10 @@ export function AppShell() {
   const searchResults = getSearchResults(project, search.query);
   const legend = getLegendForMap(map);
   const routePlan = buildRoutePlan(project, routePlannerStart, routePlannerEnd);
-  const primaryModes = modes.filter((mode) => primaryModeValues.has(mode.value));
-  const secondaryModes = modes.filter((mode) => !primaryModeValues.has(mode.value));
-  const primaryTools = tools.filter((tool) => primaryToolValues.has(tool.value));
-  const secondaryTools = tools.filter((tool) => !primaryToolValues.has(tool.value));
-  const activeSecondaryMode = secondaryModes.find((mode) => mode.value === editorMode);
-  const activeSecondaryTool = secondaryTools.find((tool) => tool.value === activeTool);
+  const hasLeftSidebar = showLeftSidebar && !isCompactLayout;
+  const hasRightSidebar = showRightSidebar && !isCompactLayout;
+  const centerPanelDefaultSize = hasLeftSidebar && hasRightSidebar ? 62 : hasLeftSidebar ? 82 : hasRightSidebar ? 80 : 100;
+  // (All modes/tools are rendered in the vertical rail, no primary/secondary split needed)
 
   useEffect(() => {
     boot();
@@ -172,6 +176,16 @@ export function AppShell() {
       console.error(error);
       toast('Import failed. Make sure the file is a valid project JSON export.');
     }
+  };
+
+  const handleClearMap = () => {
+    const confirmed =
+      typeof window === 'undefined'
+        ? true
+        : window.confirm(`Clear all rooms, corridors, doors, notes, and overlays from "${map.name}"? Map details and background will stay in place.`);
+    if (!confirmed) return;
+    clearActiveMap();
+    toast(`Cleared ${map.name}.`);
   };
 
   const toolContext = useMemo(() => {
@@ -319,38 +333,6 @@ export function AppShell() {
     toolSettings.transitionType,
   ]);
 
-  const beginResize = useCallback((side: 'left' | 'right') => (event: ReactMouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const originX = event.clientX;
-    const originWidth = side === 'left' ? leftSidebarWidth : rightSidebarWidth;
-    const onMove = (moveEvent: MouseEvent) => {
-      const delta = moveEvent.clientX - originX;
-      if (side === 'left') {
-        const next = Math.min(460, Math.max(220, originWidth + delta));
-        setLeftSidebarWidth(next);
-      } else {
-        const next = Math.min(480, Math.max(260, originWidth - delta));
-        setRightSidebarWidth(next);
-      }
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [leftSidebarWidth, rightSidebarWidth]);
-
-  const workspaceGridTemplate = useMemo(() => {
-    if (isCompactLayout) return 'minmax(0, 1fr)';
-    if (showLeftSidebar && showRightSidebar) {
-      return `${leftSidebarWidth}px 8px minmax(0, 1fr) 8px ${rightSidebarWidth}px`;
-    }
-    if (showLeftSidebar) return `${leftSidebarWidth}px 8px minmax(0, 1fr)`;
-    if (showRightSidebar) return `minmax(0, 1fr) 8px ${rightSidebarWidth}px`;
-    return 'minmax(0, 1fr)';
-  }, [isCompactLayout, leftSidebarWidth, rightSidebarWidth, showLeftSidebar, showRightSidebar]);
-
   if (!loaded) {
     return (
       <div className="loading-shell">
@@ -398,277 +380,211 @@ export function AppShell() {
         <div className="command-bar__actions">
           <GhostButton aria-label="Undo" onClick={undo}>Undo</GhostButton>
           <GhostButton aria-label="Redo" onClick={redo}>Redo</GhostButton>
+          <Button
+            aria-label="Generate dungeon"
+            data-testid="generate-dungeon-button"
+            onClick={() => generateDungeon()}
+            style={{ background: 'var(--crimson)', color: 'var(--bone)' }}
+          >
+            Generate
+          </Button>
+          <GhostButton
+            aria-label="Clear current map"
+            className="is-danger"
+            data-testid="clear-map-button"
+            onClick={handleClearMap}
+          >
+            Clear Map
+          </GhostButton>
           <Button aria-label="Export map PNG" onClick={exportMapPng}>Export</Button>
-          <ActionMenu label="More" iconKind="more" testId="topbar-more-menu">
-            <ActionMenuButton
-              label={map.view.renderMode === 'preview_3d' ? 'Switch To 2D Editor' : 'Open 3D Preview'}
-              testId="toggle-3d-preview"
-              onClick={() =>
-                updateMapView({
-                  renderMode: map.view.renderMode === 'preview_3d' ? 'editor_2d' : 'preview_3d',
-                })
-              }
-            />
-            <ActionMenuButton label="Open Command Palette" onClick={() => setCommandPaletteOpen(true)} />
-            <ActionMenuButton label="Toggle Drawer" onClick={() => toggleSidebar('bottom')} />
-            <ActionMenuButton label="Mark Map Reviewed" onClick={markActiveMapReviewed} />
-            <ActionMenuButton label="Back" onClick={navigateBack} />
-            <ActionMenuButton label="Forward" onClick={navigateForward} />
-            <ActionMenuButton label={showLeftSidebar ? 'Hide Explorer' : 'Show Explorer'} onClick={() => toggleSidebar('left')} />
-            <ActionMenuButton label={showRightSidebar ? 'Hide Inspector' : 'Show Inspector'} onClick={() => toggleSidebar('right')} />
-            <ActionMenuButton label="Import Project" onClick={() => importInputRef.current?.click()} />
-            <ActionMenuButton label="Export Project JSON" onClick={exportProjectJson} />
-            <ActionMenuButton label="Export Map PDF" onClick={() => void exportMapPdf()} />
-          </ActionMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="inline-flex items-center gap-2 px-3 py-2.5 text-[var(--text-muted)] rounded-xl border border-[rgba(255,200,200,0.06)] bg-[#1e1818] cursor-pointer hover:bg-[#2c2424] hover:border-[var(--line-strong)] transition-colors"
+                data-testid="topbar-more-menu"
+                type="button"
+              >
+                <RailIcon kind="more" />
+                <span>More</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                data-testid="toggle-3d-preview"
+                onSelect={() => updateMapView({ renderMode: map.view.renderMode === 'preview_3d' ? 'editor_2d' : 'preview_3d' })}
+              >
+                {map.view.renderMode === 'preview_3d' ? 'Switch To 2D Editor' : 'Open 3D Preview'}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setCommandPaletteOpen(true)}>Open Command Palette</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => toggleSidebar('bottom')}>Toggle Drawer</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={markActiveMapReviewed}>Mark Map Reviewed</DropdownMenuItem>
+              <DropdownMenuItem onSelect={navigateBack}>Back</DropdownMenuItem>
+              <DropdownMenuItem onSelect={navigateForward}>Forward</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => toggleSidebar('left')}>{showLeftSidebar ? 'Hide Explorer' : 'Show Explorer'}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => toggleSidebar('right')}>{showRightSidebar ? 'Hide Inspector' : 'Show Inspector'}</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => importInputRef.current?.click()}>Import Project</DropdownMenuItem>
+              <DropdownMenuItem onSelect={exportProjectJson}>Export Project JSON</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void exportMapPdf()}>Export Map PDF</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <BadgeState saveState={saveState} />
         </div>
       </header>
 
-      <div
-        className={`workspace-shell ${showLeftSidebar ? 'has-left' : ''} ${showRightSidebar ? 'has-right' : ''}`}
-        style={{ gridTemplateColumns: workspaceGridTemplate }}
-      >
-        {showLeftSidebar ? (
-          <LeftSidebar
-            onCreateMap={createMap}
-            onCreateSnapshot={() => createSnapshot('Manual snapshot')}
-            project={project}
-            reviewItems={reviewItems}
-            stats={stats}
-          />
-        ) : null}
-        {showLeftSidebar && !isCompactLayout ? (
-          <div
-            aria-label="Resize explorer panel"
-            className="pane-splitter pane-splitter--left"
-            onMouseDown={beginResize('left')}
-            role="separator"
-          />
+      <PanelGroup orientation="horizontal" className="flex-1 min-h-0 min-w-0 gap-1">
+        {hasLeftSidebar ? (
+          <>
+            <ResizablePanel defaultSize={18} minSize={14} maxSize={30} className="min-h-0 h-full">
+              <LeftSidebar
+                onCreateMap={createMap}
+                onCreateSnapshot={() => createSnapshot('Manual snapshot')}
+                project={project}
+                reviewItems={reviewItems}
+                stats={stats}
+              />
+            </ResizablePanel>
+            <PanelResizeHandle className="w-2 rounded-lg bg-gradient-to-b from-[rgba(196,60,76,0.18)] to-[rgba(196,60,76,0.04)] border border-[rgba(196,60,76,0.24)] hover:from-[rgba(196,60,76,0.32)] hover:to-[rgba(196,60,76,0.08)] hover:border-[rgba(196,60,76,0.42)] transition-colors cursor-col-resize" />
+          </>
         ) : null}
 
-        <section className="center-stage">
-          <div className="center-stage__bar">
-            <div className="map-tabs" data-testid="map-tabs">
-              {workspace.openMapIds.map((mapId) => {
-                const tabMap = project.maps.find((entry) => entry.id === mapId);
-                if (!tabMap) return null;
-                return (
-                  <div className={`map-tab ${map.id === mapId ? 'is-active' : ''}`} key={mapId}>
-                    <button
-                      aria-label={`Open ${tabMap.name}`}
-                      className="map-tab__open"
-                      onClick={() => openMap(mapId, { pushHistory: false })}
-                      type="button"
-                    >
-                      <span className="map-tab__accent" style={{ background: tabMap.accent }} />
-                      <strong>{tabMap.name}</strong>
-                      <small>{tabMap.style === 'graph' ? 'Route Graph' : 'Floorplan'}</small>
-                    </button>
-                    {workspace.openMapIds.length > 1 ? (
-                      <button
-                        aria-label={`Close ${tabMap.name}`}
-                        className="map-tab__close"
-                        data-testid={`close-map-tab-${mapId}`}
-                        onClick={() => closeMap(mapId)}
-                        type="button"
-                      >
-                        ×
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="editor-toolbar" data-testid="tool-rail">
-            <div className="editor-toolbar__section">
-              <span className="section-eyebrow">Mode</span>
-              <div className="editor-toolbar__chips">
-                {primaryModes.map((mode) => (
+        <ResizablePanel defaultSize={centerPanelDefaultSize} minSize={40} className="min-h-0">
+          <div className="center-panel-shell">
+            <div className="tool-rail-vertical" data-testid="tool-rail">
+              <div className="tool-rail-vertical__group">
+                <span className="tool-rail-vertical__label">Mode</span>
+                {modes.map((mode) => (
                   <button
                     key={mode.value}
-                    className={`editor-toolbar__chip ${editorMode === mode.value ? 'is-active' : ''}`}
+                    className={`tool-rail-vertical__btn ${editorMode === mode.value ? 'is-active' : ''}`}
                     data-testid={`mode-${mode.value}`}
                     onClick={() => setEditorMode(mode.value)}
+                    title={mode.label}
                     type="button"
                   >
-                    <span className="editor-toolbar__glyph"><RailIcon kind={mode.icon} /></span>
-                    <span>{mode.label}</span>
+                    <RailIcon kind={mode.icon} />
+                    <span>{mode.shortLabel}</span>
                   </button>
                 ))}
-                {secondaryModes.length ? (
-                  <ActionMenu
-                    active={Boolean(activeSecondaryMode)}
-                    className="editor-toolbar__menu"
-                    iconKind={activeSecondaryMode?.icon ?? 'more'}
-                    label={activeSecondaryMode?.label ?? 'More'}
-                  >
-                    {secondaryModes.map((mode) => (
-                      <ActionMenuButton
-                        icon={<RailIcon kind={mode.icon} />}
-                        key={mode.value}
-                        label={mode.label}
-                        onClick={() => setEditorMode(mode.value)}
-                      />
-                    ))}
-                  </ActionMenu>
-                ) : null}
               </div>
-            </div>
-
-            <div className="editor-toolbar__section editor-toolbar__section--tools">
-              <span className="section-eyebrow">Tools</span>
-              <div className="editor-toolbar__chips">
-                {primaryTools.map((tool) => (
+              <div className="tool-rail-vertical__divider" />
+              <div className="tool-rail-vertical__group">
+                <span className="tool-rail-vertical__label">Tools</span>
+                {tools.map((tool) => (
                   <button
                     key={tool.value}
-                    className={`editor-toolbar__chip ${activeTool === tool.value ? 'is-active' : ''}`}
+                    className={`tool-rail-vertical__btn ${activeTool === tool.value ? 'is-active' : ''}`}
                     data-testid={`tool-${tool.value}`}
                     onClick={() => setActiveTool(tool.value)}
+                    title={tool.label}
                     type="button"
                   >
-                    <span className="editor-toolbar__glyph"><RailIcon kind={tool.icon} /></span>
-                    <span>{tool.label}</span>
+                    <RailIcon kind={tool.icon} />
+                    <span>{tool.shortLabel}</span>
                   </button>
                 ))}
-                {secondaryTools.length ? (
-                  <ActionMenu
-                    active={Boolean(activeSecondaryTool)}
-                    className="editor-toolbar__menu"
-                    iconKind={activeSecondaryTool?.icon ?? 'more'}
-                    label={activeSecondaryTool?.label ?? 'More'}
-                  >
-                    {secondaryTools.map((tool) => (
-                      <ActionMenuButton
-                        icon={<RailIcon kind={tool.icon} />}
-                        key={tool.value}
-                        label={tool.label}
-                        onClick={() => setActiveTool(tool.value)}
-                      />
-                    ))}
-                  </ActionMenu>
-                ) : null}
               </div>
             </div>
-          </div>
-
-          {toolContext ? <div className="editor-strip">{toolContext}</div> : null}
-
-          <div className="canvas-meta-strip">
-            <div>
-              <strong>{map.name}</strong>
-              <span>{map.region} / {map.floor} / {map.style === 'graph' ? 'Route Graph' : map.style}</span>
+            <section className="center-stage">
+            <div className="center-stage__bar">
+              <div className="map-tabs" data-testid="map-tabs">
+                {workspace.openMapIds.map((mapId) => {
+                  const tabMap = project.maps.find((entry) => entry.id === mapId);
+                  if (!tabMap) return null;
+                  return (
+                    <div className={`map-tab ${map.id === mapId ? 'is-active' : ''}`} key={mapId}>
+                      <button
+                        aria-label={`Open ${tabMap.name}`}
+                        className="map-tab__open"
+                        onClick={() => openMap(mapId, { pushHistory: false })}
+                        type="button"
+                      >
+                        <span className="map-tab__accent" style={{ background: tabMap.accent }} />
+                        <strong>{tabMap.name}</strong>
+                        <small>{tabMap.style === 'graph' ? 'Route Graph' : 'Floorplan'}</small>
+                      </button>
+                      {workspace.openMapIds.length > 1 ? (
+                        <button
+                          aria-label={`Close ${tabMap.name}`}
+                          className="map-tab__close"
+                          data-testid={`close-map-tab-${mapId}`}
+                          onClick={() => closeMap(mapId)}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-            <div className="canvas-chip-strip">
-              <span data-testid="map-room-count">{map.floorRooms.length} rooms</span>
-              <span data-testid="map-corridor-count">{map.corridors.length} corridors</span>
-              <span data-testid="map-door-count">{map.doorways.length} links</span>
-              <span>{Math.round(map.view.zoom * 100)}%</span>
+
+            {toolContext ? <div className="editor-strip">{toolContext}</div> : null}
+
+            <div className="canvas-meta-strip">
+              <div>
+                <strong>{map.name}</strong>
+                <span>{map.region} / {map.floor} / {map.style === 'graph' ? 'Route Graph' : map.style}</span>
+              </div>
+              <div className="canvas-chip-strip">
+                <span data-testid="map-room-count">{map.floorRooms.length} rooms</span>
+                <span data-testid="map-corridor-count">{map.corridors.length} corridors</span>
+                <span data-testid="map-door-count">{map.doorways.length} links</span>
+                <span>{Math.round(map.view.zoom * 100)}%</span>
+              </div>
             </div>
-          </div>
 
-          {map.view.renderMode === 'preview_3d' ? (
-            <Suspense fallback={<div className="canvas-loading-state">Loading cinematic preview...</div>}>
-              <MapThreePreview map={map} />
-            </Suspense>
-          ) : (
-            <MapCanvas ref={canvasRef} map={map} project={project} />
-          )}
+            {map.view.renderMode === 'preview_3d' ? (
+              <Suspense fallback={<div className="canvas-loading-state">Loading cinematic preview...</div>}>
+                <MapThreePreview map={map} />
+              </Suspense>
+            ) : (
+              <MapCanvas ref={canvasRef} map={map} project={project} />
+            )}
 
-          {showBottomPanel ? (
-            <BottomPanel
-              legend={legend}
-              project={project}
-              reviewItems={reviewItems}
-              routePlan={routePlan}
-              searchResults={searchResults}
-              stats={stats}
+            {showBottomPanel ? (
+              <BottomPanel
+                legend={legend}
+                project={project}
+                reviewItems={reviewItems}
+                routePlan={routePlan}
+                searchResults={searchResults}
+                stats={stats}
+              />
+            ) : null}
+
+            <input
+              ref={importInputRef}
+              accept="application/json,.json"
+              hidden
+              type="file"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleImportProject(file);
+                event.target.value = '';
+              }}
             />
-          ) : null}
+          </section>
+          </div>
+        </ResizablePanel>
 
-          <input
-            ref={importInputRef}
-            accept="application/json,.json"
-            hidden
-            type="file"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void handleImportProject(file);
-              event.target.value = '';
-            }}
-          />
-        </section>
-
-        {showRightSidebar && !isCompactLayout ? (
-          <div
-            aria-label="Resize inspector panel"
-            className="pane-splitter pane-splitter--right"
-            onMouseDown={beginResize('right')}
-            role="separator"
-          />
+        {hasRightSidebar ? (
+          <>
+            <PanelResizeHandle className="w-2 rounded-lg bg-gradient-to-b from-[rgba(196,60,76,0.18)] to-[rgba(196,60,76,0.04)] border border-[rgba(196,60,76,0.24)] hover:from-[rgba(196,60,76,0.32)] hover:to-[rgba(196,60,76,0.08)] hover:border-[rgba(196,60,76,0.42)] transition-colors cursor-col-resize" />
+            <ResizablePanel defaultSize={20} minSize={16} maxSize={32} className="min-h-0 h-full">
+              <RightSidebar map={map} project={project} />
+            </ResizablePanel>
+          </>
         ) : null}
-        {showRightSidebar ? <RightSidebar map={map} project={project} /> : null}
-      </div>
+      </PanelGroup>
 
       <CommandPalette project={project} />
       <IconPickerModal map={map} project={project} />
       <OnboardingModal />
     </div>
-  );
-}
-
-function ActionMenu({
-  label,
-  children,
-  active = false,
-  className = '',
-  iconKind,
-  testId,
-}: {
-  label: string;
-  children: ReactNode;
-  active?: boolean;
-  className?: string;
-  iconKind?: string;
-  testId?: string;
-}) {
-  return (
-    <details className={`menu-dropdown ${className} ${active ? 'is-active' : ''}`}>
-      <summary className="menu-dropdown__trigger" data-testid={testId}>
-        {iconKind ? <span className="editor-toolbar__glyph"><RailIcon kind={iconKind} /></span> : null}
-        <span>{label}</span>
-      </summary>
-      <div className="menu-dropdown__panel">{children}</div>
-    </details>
-  );
-}
-
-function ActionMenuButton({
-  label,
-  onClick,
-  icon,
-  testId,
-}: {
-  label: string;
-  onClick: () => void;
-  icon?: ReactNode;
-  testId?: string;
-}) {
-  return (
-    <button
-      className="menu-dropdown__item"
-      data-testid={testId}
-      onClick={(event) => {
-        onClick();
-        const details = event.currentTarget.closest('details');
-        if (details instanceof HTMLDetailsElement) details.open = false;
-      }}
-      type="button"
-    >
-      {icon ? <span className="menu-dropdown__item-icon">{icon}</span> : null}
-      <span>{label}</span>
-    </button>
   );
 }
 

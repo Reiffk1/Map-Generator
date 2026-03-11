@@ -13,6 +13,7 @@ import { Arc, Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage
 import useImage from 'use-image';
 
 import { builtInIconLibrary, type IconPalette, type IconPrimitive } from '../../data/iconLibrary';
+import { TileCanvasLayer } from './TileCanvasLayer';
 import { getMapContentBounds, snapDoorwayToFloorplan } from '../../lib/floorplan';
 import { clamp } from '../../lib/utils';
 import type {
@@ -200,6 +201,7 @@ const createPatternImage = (
 export interface MapCanvasHandle {
   toDataUrl: () => string | undefined;
   fitToMap: () => void;
+  fitSelection: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
 }
@@ -491,9 +493,45 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       });
     }, [map, size.height, size.width, updateMapView]);
 
+    const fitSelection = useCallback(() => {
+      if (!size.width || !size.height) return;
+      if (selection.kind === 'none') return;
+      const ids = 'ids' in selection ? selection.ids : [];
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      const expand = (x: number, y: number, w: number, h: number) => {
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+      };
+      for (const id of ids) {
+        const room = map.floorRooms.find((r) => r.id === id);
+        if (room) { expand(room.bounds.x, room.bounds.y, room.bounds.width, room.bounds.height); continue; }
+        const corridor = map.corridors.find((c) => c.id === id);
+        if (corridor) { for (const p of corridor.points) expand(p.x - corridor.width, p.y - corridor.width, corridor.width * 2, corridor.width * 2); continue; }
+        const door = map.doorways.find((d) => d.id === id);
+        if (door) { expand(door.position.x - 30, door.position.y - 30, 60, 60); continue; }
+        const marker = map.markers.find((m) => m.id === id);
+        if (marker) { expand(marker.position.x - 20, marker.position.y - 20, 40, 40); continue; }
+        const note = map.notesBoard.find((n) => n.id === id);
+        if (note) { expand(note.position.x - 40, note.position.y - 20, 200, 80); continue; }
+        const trans = map.transitions.find((t) => t.id === id);
+        if (trans) { expand(trans.position.x - 30, trans.position.y - 30, 60, 60); }
+      }
+      if (!isFinite(minX)) return;
+      const bw = maxX - minX;
+      const bh = maxY - minY;
+      const padding = 80;
+      const nextZoom = clamp(Math.min((size.width - padding * 2) / bw, (size.height - padding * 2) / bh), 0.32, 3);
+      updateMapView({
+        zoom: nextZoom,
+        pan: { x: (size.width - bw * nextZoom) / 2 - minX * nextZoom, y: (size.height - bh * nextZoom) / 2 - minY * nextZoom },
+        hasUserAdjusted: true,
+      });
+    }, [map, selection, size.width, size.height, updateMapView]);
+
     useImperativeHandle(ref, () => ({
       toDataUrl: () => stageRef.current?.toDataURL({ pixelRatio: 2 }),
       fitToMap,
+      fitSelection,
       zoomIn: () => applyZoom(clamp(map.view.zoom * 1.12, 0.32, 3)),
       zoomOut: () => applyZoom(clamp(map.view.zoom / 1.12, 0.32, 3)),
     }));
@@ -834,12 +872,27 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
             />
           </Layer>
 
+          {map.tileGrid && map.view.renderStyle2d === 'tile' ? (
+            <Layer listening={false}>
+              <TileCanvasLayer
+                grid={map.tileGrid}
+                packId={map.view.assetPackId}
+                viewportWidth={size.width}
+                viewportHeight={size.height}
+                zoom={map.view.zoom}
+                panX={map.view.pan.x}
+                panY={map.view.pan.y}
+              />
+            </Layer>
+          ) : null}
+
           <Layer>
             {layerVisibleForPreset(map, 'paths')
               ? map.corridors.map((corridor) => {
                   const isSelected = selection.kind === 'corridor' && selection.ids.includes(corridor.id);
+                  const isTileMode = map.view.renderStyle2d === 'tile' && !!map.tileGrid;
                   return (
-                  <Group key={corridor.id} onClick={handleEntitySelection('corridor', corridor.id)}>
+                  <Group key={corridor.id} onClick={handleEntitySelection('corridor', corridor.id)} opacity={isTileMode && !isSelected ? 0.12 : 1}>
                     {isSelected ? (
                       <Line
                         points={corridor.points.flatMap((point) => [point.x, point.y])}
@@ -891,6 +944,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
             {layerVisibleForPreset(map, 'rooms')
               ? map.floorRooms.map((room) => {
                   const isSelected = selection.kind === 'floor_room' && selection.ids.includes(room.id);
+                  const isTileMode = map.view.renderStyle2d === 'tile' && !!map.tileGrid;
                   return (
                     <Group
                       draggable={editorMode !== 'navigate' && activeTool === 'select'}
@@ -899,42 +953,47 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                       onDragEnd={(event) => moveEntity('floor_room', room.id, { x: event.target.x(), y: event.target.y() })}
                       x={room.bounds.x}
                       y={room.bounds.y}
+                      opacity={isTileMode ? (isSelected ? 0.6 : 0.15) : 1}
                     >
+                      {!isTileMode ? (
+                        <>
+                          <Rect
+                            width={room.bounds.width}
+                            height={room.bounds.height}
+                            cornerRadius={room.roomShape === 'octagon' ? 36 : 24}
+                            fillPatternImage={skinRoomTexture ?? roomPatternImage}
+                            fillPatternRepeat="repeat"
+                            fill={surfaceStyle.roomBase}
+                            stroke={isSelected ? selectionStroke : wallTone}
+                            strokeWidth={isSelected ? 6 : 7}
+                            shadowBlur={isSelected ? 30 : 24}
+                            shadowColor="rgba(0,0,0,0.55)"
+                            opacity={entityOpacity(room.state)}
+                          />
+                          <Rect
+                            x={8}
+                            y={8}
+                            width={room.bounds.width - 16}
+                            height={room.bounds.height - 16}
+                            cornerRadius={room.roomShape === 'octagon' ? 30 : 18}
+                            fill={room.color}
+                            opacity={0.15}
+                          />
+                        </>
+                      ) : null}
                       <Rect
-                        width={room.bounds.width}
-                        height={room.bounds.height}
-                        cornerRadius={room.roomShape === 'octagon' ? 36 : 24}
-                        fillPatternImage={skinRoomTexture ?? roomPatternImage}
-                        fillPatternRepeat="repeat"
-                        fill={surfaceStyle.roomBase}
-                        stroke={isSelected ? selectionStroke : wallTone}
-                        strokeWidth={isSelected ? 6 : 7}
-                        shadowBlur={isSelected ? 30 : 24}
-                        shadowColor="rgba(0,0,0,0.55)"
-                        opacity={entityOpacity(room.state)}
-                      />
-                      <Rect
-                        x={8}
-                        y={8}
-                        width={room.bounds.width - 16}
-                        height={room.bounds.height - 16}
+                        x={isTileMode ? 0 : 8}
+                        y={isTileMode ? 0 : 8}
+                        width={isTileMode ? room.bounds.width : room.bounds.width - 16}
+                        height={isTileMode ? room.bounds.height : room.bounds.height - 16}
                         cornerRadius={room.roomShape === 'octagon' ? 30 : 18}
-                        fill={room.color}
-                        opacity={0.15}
-                      />
-                      <Rect
-                        x={8}
-                        y={8}
-                        width={room.bounds.width - 16}
-                        height={room.bounds.height - 16}
-                        cornerRadius={room.roomShape === 'octagon' ? 30 : 18}
-                        stroke={isSelected ? selectionStroke : surfaceStyle.roomInset}
+                        stroke={isSelected ? selectionStroke : (isTileMode ? 'rgba(255,255,255,0.2)' : surfaceStyle.roomInset)}
                         strokeWidth={isSelected ? 3 : 1.5}
-                        opacity={0.4}
+                        opacity={isTileMode ? 1 : 0.4}
                       />
-                      <Text x={18} y={16} text={room.label} fontFamily="Space Grotesk" fontSize={22} fontStyle="700" fill={surfaceStyle.label} />
+                      <Text x={18} y={16} text={room.label} fontFamily="Space Grotesk" fontSize={22} fontStyle="700" fill={isTileMode ? '#ffffff' : surfaceStyle.label} />
                       {room.subtitle ? (
-                        <Text x={18} y={46} text={room.subtitle} fontFamily="Inter Tight" fontSize={13} fill={surfaceStyle.labelMuted} />
+                        <Text x={18} y={46} text={room.subtitle} fontFamily="Inter Tight" fontSize={13} fill={isTileMode ? '#cccccc' : surfaceStyle.labelMuted} />
                       ) : null}
                     </Group>
                   );
@@ -1289,9 +1348,26 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           <button aria-label="Zoom out canvas" data-testid="zoom-out-button" onClick={() => applyZoom(clamp(map.view.zoom / 1.12, 0.32, 3))} type="button">-</button>
           <button aria-label="Zoom in canvas" data-testid="zoom-in-button" onClick={() => applyZoom(clamp(map.view.zoom * 1.12, 0.32, 3))} type="button">+</button>
           <button aria-label="Fit map to canvas" data-testid="fit-map-button" onClick={() => fitToMap()} type="button">Fit</button>
+          {selection.kind !== 'none' ? (
+            <button aria-label="Fit selection to canvas" data-testid="fit-selection-button" onClick={() => fitSelection()} type="button">Sel</button>
+          ) : null}
           <button aria-label={map.view.showGrid ? 'Hide grid' : 'Show grid'} data-testid="toggle-grid-button" onClick={() => updateMapView({ showGrid: !map.view.showGrid })} type="button">
             {map.view.showGrid ? 'Grid' : 'No Grid'}
           </button>
+          <select
+            aria-label="Grid snap size"
+            data-testid="grid-size-select"
+            value={map.view.gridSize}
+            onChange={(e) => updateMapView({ gridSize: Number(e.target.value) })}
+            style={{ background: 'rgba(0,0,0,0.5)', color: '#ccc', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, padding: '2px 4px', fontSize: '0.75em', cursor: 'pointer' }}
+          >
+            <option value={16}>16px</option>
+            <option value={24}>24px</option>
+            <option value={32}>32px</option>
+            <option value={48}>48px</option>
+            <option value={64}>64px</option>
+            <option value={96}>96px</option>
+          </select>
         </div>
 
         {showHotspots ? (

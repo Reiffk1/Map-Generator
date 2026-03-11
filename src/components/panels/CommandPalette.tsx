@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-
 import type { ProjectRecord } from '../../models/types';
 import { useAppStore } from '../../store/useAppStore';
+import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '../ui/command';
 
 export function CommandPalette({ project }: { project: ProjectRecord }) {
   const open = useAppStore((state) => state.commandPaletteOpen);
@@ -10,115 +9,92 @@ export function CommandPalette({ project }: { project: ProjectRecord }) {
   const createMap = useAppStore((state) => state.createMap);
   const cloneActiveMap = useAppStore((state) => state.cloneActiveMap);
   const createSnapshot = useAppStore((state) => state.createSnapshot);
+  const clearActiveMap = useAppStore((state) => state.clearActiveMap);
   const setEditorMode = useAppStore((state) => state.setEditorMode);
   const setActiveTool = useAppStore((state) => state.setActiveTool);
   const openMap = useAppStore((state) => state.openMap);
   const restartOnboarding = useAppStore((state) => state.restartOnboarding);
+  const generateDungeon = useAppStore((state) => state.generateDungeon);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
   const setInspectorTab = useAppStore((state) => state.setInspectorTab);
   const updateMapView = useAppStore((state) => state.updateMapView);
-  const [query, setQuery] = useState('');
 
-  const items = useMemo(() => {
-    const base = [
-      { id: 'new-map', label: 'Create new map', run: () => createMap() },
-      { id: 'clone-map', label: 'Clone current map', run: () => cloneActiveMap() },
-      { id: 'snapshot', label: 'Capture snapshot', run: () => createSnapshot('Quick snapshot') },
-      { id: 'mode-floorplan', label: 'Switch to Floorplan Mode', run: () => setEditorMode('floorplan') },
-      { id: 'mode-graph', label: 'Switch to Graph Mode', run: () => setEditorMode('graph') },
-      { id: 'mode-ink', label: 'Switch to Ink Mode', run: () => setEditorMode('ink') },
-      { id: 'mode-portal', label: 'Switch to Links Mode', run: () => setEditorMode('portal') },
-      { id: 'mode-navigate', label: 'Switch to Navigate Mode', run: () => setEditorMode('navigate') },
-      { id: 'mode-review', label: 'Switch to Review Mode', run: () => setEditorMode('review') },
-      { id: 'tool-room', label: 'Equip room tool', run: () => setActiveTool('floorRoom') },
-      { id: 'tool-corridor', label: 'Equip corridor tool', run: () => setActiveTool('corridor') },
-      { id: 'tool-doorway', label: 'Equip doorway tool', run: () => setActiveTool('doorway') },
-      { id: 'tool-marker', label: 'Equip marker tool', run: () => setActiveTool('marker') },
-      { id: 'tool-note', label: 'Equip note tool', run: () => setActiveTool('note') },
-      { id: 'tool-wall', label: 'Equip wall tool', run: () => setActiveTool('wall') },
-      { id: 'tool-route', label: 'Equip route tool', run: () => setActiveTool('route') },
-      { id: 'tool-sketch', label: 'Equip sketch tool', run: () => setActiveTool('sketch') },
-      { id: 'tool-erase', label: 'Equip erase tool', run: () => setActiveTool('erase') },
-      { id: 'toggle-left', label: 'Toggle explorer sidebar', run: () => toggleSidebar('left') },
-      { id: 'toggle-right', label: 'Toggle inspector sidebar', run: () => toggleSidebar('right') },
-      { id: 'toggle-bottom', label: 'Toggle bottom drawer', run: () => toggleSidebar('bottom') },
-      {
-        id: 'toggle-3d-preview',
-        label: 'Toggle 3D preview mode',
-        run: () => {
-          const map = useAppStore.getState().workspace.projects
-            .find((project) => project.id === useAppStore.getState().workspace.activeProjectId)
-            ?.maps.find((entry) => entry.id === useAppStore.getState().workspace.activeMapId);
-          updateMapView({ renderMode: map?.view.renderMode === 'preview_3d' ? 'editor_2d' : 'preview_3d' });
-        },
-      },
-      { id: 'inspector-selection', label: 'Open inspector: Selection', run: () => setInspectorTab('selection') },
-      { id: 'inspector-map', label: 'Open inspector: Map', run: () => setInspectorTab('map') },
-      { id: 'inspector-layers', label: 'Open inspector: Layers', run: () => setInspectorTab('layers') },
-      { id: 'inspector-links', label: 'Open inspector: Links', run: () => setInspectorTab('links') },
-      { id: 'inspector-notes', label: 'Open inspector: Notes', run: () => setInspectorTab('notes') },
-      { id: 'inspector-help', label: 'Open inspector: Help', run: () => setInspectorTab('help') },
-      { id: 'tour', label: 'Restart guided tutorial', run: () => restartOnboarding() },
-    ];
-
-    const mapCommands = project.maps.map((map) => ({
-      id: `map_${map.id}`,
-      label: `Open map: ${map.name}`,
-      run: () => openMap(map.id),
-    }));
-
-    const combined = [...base, ...mapCommands];
-    const normalized = query.trim().toLowerCase();
-    return normalized
-      ? combined.filter((item) => item.label.toLowerCase().includes(normalized))
-      : combined;
-  }, [cloneActiveMap, createMap, createSnapshot, openMap, project.maps, query, restartOnboarding, setActiveTool, setEditorMode, setInspectorTab, toggleSidebar, updateMapView]);
+  const run = (fn: () => void) => () => {
+    fn();
+    setOpen(false);
+  };
 
   return (
-    <AnimatePresence>
-      {open ? (
-        <motion.div
-          className="command-palette-backdrop"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={() => {
-            setQuery('');
-            setOpen(false);
-          }}
-        >
-          <motion.div
-            className="command-palette"
-            initial={{ opacity: 0, y: 16, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 16, scale: 0.98 }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <input
-              autoFocus
-              className="command-palette__input"
-              placeholder="Type a command or jump to a map"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <div className="command-palette__results">
-              {items.slice(0, 12).map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    item.run();
-                    setQuery('');
-                    setOpen(false);
-                  }}
-                  type="button"
-                >
-                  {item.label}
-                </button>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className="max-w-[760px] overflow-hidden p-0 shadow-2xl">
+        <DialogTitle className="sr-only">Command Palette</DialogTitle>
+        <Command>
+          <CommandInput placeholder="Type a command or jump to a map..." />
+          <CommandList>
+            <CommandEmpty>No matching commands.</CommandEmpty>
+
+            <CommandGroup heading="Maps">
+              {project.maps.map((m) => (
+                <CommandItem key={m.id} onSelect={run(() => openMap(m.id))}>
+                  Open map: {m.name}
+                </CommandItem>
               ))}
-            </div>
-          </motion.div>
-        </motion.div>
-      ) : null}
-    </AnimatePresence>
+              <CommandItem onSelect={run(createMap)}>Create new map</CommandItem>
+              <CommandItem onSelect={run(cloneActiveMap)}>Clone current map</CommandItem>
+            </CommandGroup>
+
+            <CommandGroup heading="Modes">
+              <CommandItem onSelect={run(() => setEditorMode('floorplan'))}>Switch to Floorplan Mode</CommandItem>
+              <CommandItem onSelect={run(() => setEditorMode('graph'))}>Switch to Graph Mode</CommandItem>
+              <CommandItem onSelect={run(() => setEditorMode('ink'))}>Switch to Ink Mode</CommandItem>
+              <CommandItem onSelect={run(() => setEditorMode('portal'))}>Switch to Links Mode</CommandItem>
+              <CommandItem onSelect={run(() => setEditorMode('navigate'))}>Switch to Navigate Mode</CommandItem>
+              <CommandItem onSelect={run(() => setEditorMode('review'))}>Switch to Review Mode</CommandItem>
+            </CommandGroup>
+
+            <CommandGroup heading="Tools">
+              <CommandItem onSelect={run(() => setActiveTool('floorRoom'))}>Equip room tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('corridor'))}>Equip corridor tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('doorway'))}>Equip doorway tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('marker'))}>Equip marker tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('note'))}>Equip note tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('wall'))}>Equip wall tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('route'))}>Equip route tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('sketch'))}>Equip sketch tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('erase'))}>Equip erase tool</CommandItem>
+            </CommandGroup>
+
+            <CommandGroup heading="Actions">
+              <CommandItem onSelect={run(() => createSnapshot('Quick snapshot'))}>Capture snapshot</CommandItem>
+              <CommandItem onSelect={run(() => {
+                if (typeof window !== 'undefined' && !window.confirm('Clear the current map content?')) return;
+                clearActiveMap();
+              })}>Clear current map</CommandItem>
+              <CommandItem onSelect={run(generateDungeon)}>Generate Dungeon</CommandItem>
+              <CommandItem onSelect={run(() => {
+                const s = useAppStore.getState();
+                const m = s.workspace.projects
+                  .find((p) => p.id === s.workspace.activeProjectId)
+                  ?.maps.find((e) => e.id === s.workspace.activeMapId);
+                updateMapView({ renderMode: m?.view.renderMode === 'preview_3d' ? 'editor_2d' : 'preview_3d' });
+              })}>Toggle 3D preview mode</CommandItem>
+              <CommandItem onSelect={run(() => toggleSidebar('left'))}>Toggle explorer sidebar</CommandItem>
+              <CommandItem onSelect={run(() => toggleSidebar('right'))}>Toggle inspector sidebar</CommandItem>
+              <CommandItem onSelect={run(() => toggleSidebar('bottom'))}>Toggle bottom drawer</CommandItem>
+              <CommandItem onSelect={run(restartOnboarding)}>Restart guided tutorial</CommandItem>
+            </CommandGroup>
+
+            <CommandGroup heading="Inspector">
+              <CommandItem onSelect={run(() => setInspectorTab('selection'))}>Open inspector: Selection</CommandItem>
+              <CommandItem onSelect={run(() => setInspectorTab('map'))}>Open inspector: Map</CommandItem>
+              <CommandItem onSelect={run(() => setInspectorTab('layers'))}>Open inspector: Layers</CommandItem>
+              <CommandItem onSelect={run(() => setInspectorTab('links'))}>Open inspector: Links</CommandItem>
+              <CommandItem onSelect={run(() => setInspectorTab('notes'))}>Open inspector: Notes</CommandItem>
+              <CommandItem onSelect={run(() => setInspectorTab('help'))}>Open inspector: Help</CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss(), react()],
   build: {
     chunkSizeWarningLimit: 650,
     rollupOptions: {
@@ -30,12 +31,7 @@ export default defineConfig({
             return 'ui-vendor';
           }
 
-          if (
-            id.includes('react') ||
-            id.includes('react-dom') ||
-            id.includes('scheduler') ||
-            id.includes('zustand')
-          ) {
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler|zustand)[\\/]/.test(id)) {
             return 'react-core';
           }
 

@@ -463,6 +463,8 @@ export interface MapViewSettings {
   pan: Point;
   hasUserAdjusted: boolean;
   renderMode: 'editor_2d' | 'preview_3d';
+  renderStyle2d: 'vector' | 'tile';
+  assetPackId: string;
   showGrid: boolean;
   snapToGrid: boolean;
   gridSize: number;
@@ -512,6 +514,7 @@ export interface MapRecord {
   zones: RegionZone[];
   sketches: SketchStroke[];
   view: MapViewSettings;
+  tileGrid?: import('./tilemap').TileGrid;
 }
 
 export interface UploadedIconAsset {

@@ -5,6 +5,10 @@ import { defaultToolSettings, describeRoomPlacement, getMarkerPresetDefinition, 
 import { attachCorridorToFloorplan, buildRoomWalls, rebuildGeneratedWalls } from '../lib/floorplan';
 import { loadStoredWorkspace, saveStoredWorkspace } from '../lib/persistence';
 import { tutorialSteps, type TutorialTrigger } from '../lib/tutorial';
+import { generateDungeon as runGenerator } from '../lib/generation/generateDungeon';
+import { createEmptyTileGrid } from '../models/tilemap';
+import { carveFloorRect, carveFloorBrush, generateWallsFromFloor } from '../lib/tilemap/walls';
+import { autotileWallLayer, autotileFloorVariation, STANDARD_WALL_IDS, STANDARD_FLOOR_IDS } from '../lib/tilemap/autotile';
 import { deepClone, makeId } from '../lib/utils';
 import type {
   AnchorRecord,
@@ -36,6 +40,38 @@ import type {
 
 const HISTORY_LIMIT = 40;
 const DEFAULT_WORKSPACE = createWorkspaceFromProject(sampleProject);
+
+const EDITOR_GRID_W = 160;
+const EDITOR_GRID_H = 120;
+const EDITOR_TILE_SIZE: 16 | 48 = 16;
+const FLOOR_TILE = 1;
+const WALL_TILE = 2;
+
+const ensureTileGrid = (map: MapRecord) => {
+  if (!map.tileGrid) {
+    map.tileGrid = createEmptyTileGrid(EDITOR_GRID_W, EDITOR_GRID_H, EDITOR_TILE_SIZE);
+  }
+};
+
+const interpolatePolyline = (points: Point[], step: number): { x: number; y: number }[] => {
+  const result: { x: number; y: number }[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    const dist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+    const steps = Math.max(1, Math.ceil(dist / step));
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      result.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    }
+  }
+  if (result.length === 0 && points.length > 0) result.push({ x: points[0]!.x, y: points[0]!.y });
+  return result;
+};
+
+const boundsOverlap = (a: Bounds, b: Bounds) =>
+  a.x < b.x + b.width && a.x + a.width > b.x &&
+  a.y < b.y + b.height && a.y + a.height > b.y;
 const now = () => new Date().toISOString();
 
 const entityStateCycle: EntityState[] = [
@@ -289,6 +325,8 @@ const normalizeMap = (source: MapRecord): MapRecord => {
       ? map.view.lightPreset
       : 'torch';
   map.view.hasUserAdjusted = Boolean(map.view.hasUserAdjusted);
+  map.view.renderStyle2d = map.view.renderStyle2d === 'vector' || map.view.renderStyle2d === 'tile' ? map.view.renderStyle2d : 'tile';
+  map.view.assetPackId = map.view.assetPackId || 'default-pixel';
   map.style = map.style === 'graph' || map.style === 'hybrid' || map.style === 'floorplan' ? map.style : 'floorplan';
   map.floorRooms = map.floorRooms?.length ? map.floorRooms : (map.rooms ?? []).map((room) => roomFromLegacy(map, room));
   map.corridors = map.corridors?.length ? map.corridors : (map.paths ?? []).map((path) => corridorFromLegacy(map, path));
@@ -391,6 +429,7 @@ interface AppStore extends UiState {
   cloneActiveMap: () => void;
   toggleMapFavorite: (mapId: string) => void;
   markActiveMapReviewed: () => void;
+  clearActiveMap: () => void;
   createSnapshot: (label?: string) => void;
   restoreSnapshot: (snapshotId: string) => void;
   addFloorRoom: (bounds: Bounds) => void;
@@ -411,6 +450,7 @@ interface AppStore extends UiState {
   seedTutorialLinkTarget: () => void;
   cycleSelectionState: () => void;
   toggleLayer: (layerId: string, key: 'visible' | 'locked', value?: boolean) => void;
+  generateDungeon: (params?: Partial<import('../models/tilemap').GeneratorParams>) => void;
   restartOnboarding: () => void;
   nextOnboardingStep: () => void;
   dismissOnboarding: (completed?: boolean) => void;
@@ -733,6 +773,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
         summary: 'Marked current map items as reviewed for this play session.',
       });
     }),
+  clearActiveMap: () => {
+    applyWorkspaceChange(set, get, (_workspace, _project, map) => {
+      map.completion = 0;
+      map.rooms = [];
+      map.paths = [];
+      map.floorRooms = [];
+      map.corridors = [];
+      map.wallSegments = [];
+      map.doorways = [];
+      map.routeOverlays = [];
+      map.transitions = [];
+      map.anchors = [];
+      map.markers = [];
+      map.notesBoard = [];
+      map.zones = [];
+      map.sketches = [];
+      map.tileGrid = createEmptyTileGrid(EDITOR_GRID_W, EDITOR_GRID_H, EDITOR_TILE_SIZE);
+      syncMap(map);
+    });
+    set({
+      selection: { kind: 'none', ids: [] },
+      routePlannerStart: undefined,
+      routePlannerEnd: undefined,
+      focusAnchorId: undefined,
+      highlightedTransitionId: undefined,
+    });
+  },
   createSnapshot: (label = 'Snapshot') =>
     applyWorkspaceChange(set, get, (_workspace, project) => {
       project.snapshots.unshift({
@@ -779,9 +846,39 @@ export const useAppStore = create<AppStore>((set, get) => ({
         lootCount: roomType === 'loot' ? 1 : 0,
         checklist: [],
       };
-      map.floorRooms.push(room);
+      const overlapping = map.floorRooms.filter((existing) => boundsOverlap(existing.bounds, bounds));
+      if (overlapping.length > 0) {
+        const primary = overlapping[0]!;
+        const allBounds = [...overlapping.map((r) => r.bounds), bounds];
+        const minX = Math.min(...allBounds.map((b) => b.x));
+        const minY = Math.min(...allBounds.map((b) => b.y));
+        const maxX = Math.max(...allBounds.map((b) => b.x + b.width));
+        const maxY = Math.max(...allBounds.map((b) => b.y + b.height));
+        primary.bounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        primary.tags = [...new Set([...primary.tags, ...room.tags, ...overlapping.flatMap((r) => r.tags)])];
+        primary.noteIds = [...new Set([...primary.noteIds, ...room.noteIds, ...overlapping.flatMap((r) => r.noteIds)])];
+        primary.lootCount += room.lootCount;
+        primary.updatedAt = now();
+        const removeIds = new Set(overlapping.slice(1).map((r) => r.id));
+        map.floorRooms = map.floorRooms.filter((r) => !removeIds.has(r.id));
+        set({ selection: { kind: 'floor_room', ids: [primary.id] } });
+      } else {
+        map.floorRooms.push(room);
+        set({ selection: { kind: 'floor_room', ids: [room.id] } });
+      }
+
+      ensureTileGrid(map);
+      const ts = map.tileGrid!.tileSizePx;
+      const tx = Math.floor(bounds.x / ts);
+      const ty = Math.floor(bounds.y / ts);
+      const tw = Math.ceil(bounds.width / ts);
+      const th = Math.ceil(bounds.height / ts);
+      carveFloorRect(map.tileGrid!, tx, ty, tw, th, FLOOR_TILE);
+      generateWallsFromFloor(map.tileGrid!, WALL_TILE);
+      autotileWallLayer(map.tileGrid!, STANDARD_WALL_IDS);
+      autotileFloorVariation(map.tileGrid!, STANDARD_FLOOR_IDS, map.floorRooms.length);
+
       syncMap(map);
-      set({ selection: { kind: 'floor_room', ids: [room.id] } });
     });
     set((state) => bumpOnboarding(state, 'room-drawn') ?? {});
   },
@@ -804,6 +901,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
         updatedAt: now(),
       };
       map.corridors.push(entry);
+
+      ensureTileGrid(map);
+      const ts = map.tileGrid!.tileSizePx;
+      const tileRadius = Math.max(1, Math.ceil(corridorWidth / (2 * ts)));
+      const pixelPoints = interpolatePolyline(attached.points, ts);
+      const tilePoints = pixelPoints.map((p) => ({ x: Math.floor(p.x / ts), y: Math.floor(p.y / ts) }));
+      carveFloorBrush(map.tileGrid!, tilePoints, tileRadius, FLOOR_TILE);
+      generateWallsFromFloor(map.tileGrid!, WALL_TILE);
+      autotileWallLayer(map.tileGrid!, STANDARD_WALL_IDS);
+      autotileFloorVariation(map.tileGrid!, STANDARD_FLOOR_IDS, map.corridors.length);
+
       syncMap(map);
       set({ selection: { kind: 'corridor', ids: [entry.id] } });
     });
@@ -1306,6 +1414,89 @@ export const useAppStore = create<AppStore>((set, get) => ({
     applyWorkspaceChange(set, get, (_workspace, _project, map) => {
       map.layers = map.layers.map((layer) => layer.id === layerId ? { ...layer, [key]: value ?? !layer[key] } : layer);
     }),
+  generateDungeon: (params) => {
+    const output = runGenerator(params);
+    applyWorkspaceChange(set, get, (workspace, project) => {
+      const mapId = makeId('map');
+      const layerIdFor = (name: string) => `${mapId}_layer_${name}`;
+      const ts = now();
+      const floorRooms: FloorRoom[] = output.rooms.map((room) => ({
+        kind: 'floor_room' as const,
+        id: room.id,
+        layerId: layerIdFor('rooms'),
+        label: room.label,
+        subtitle: '',
+        color: room.roomType === 'boss' ? '#7a2a2a' : room.roomType === 'secret' ? '#4a3a5a' : '#3a3a44',
+        tags: [],
+        state: 'unknown' as const,
+        noteIds: [],
+        createdAt: ts,
+        updatedAt: ts,
+        bounds: {
+          x: room.tileX * output.tileGrid.tileSizePx,
+          y: room.tileY * output.tileGrid.tileSizePx,
+          width: room.tileW * output.tileGrid.tileSizePx,
+          height: room.tileH * output.tileGrid.tileSizePx,
+        },
+        roomShape: 'rectangle' as const,
+        roomType: (room.roomType ?? 'chamber') as FloorRoom['roomType'],
+        fillPattern: 'stone' as const,
+        dangerLevel: 1 as const,
+        lootCount: 0,
+        checklist: [],
+      }));
+      const doorways: DoorwayRecord[] = output.doors.map((door, i) => ({
+        id: makeId('doorway'),
+        layerId: layerIdFor('transitions'),
+        label: `Door ${i + 1}`,
+        color: '#5c3d28',
+        position: {
+          x: door.tileX * output.tileGrid.tileSizePx + output.tileGrid.tileSizePx / 2,
+          y: door.tileY * output.tileGrid.tileSizePx + output.tileGrid.tileSizePx / 2,
+        },
+        orientation: door.orientation,
+        doorwayState: 'open' as const,
+        transitionType: 'door' as const,
+        width: 34,
+        tags: [],
+        noteIds: [],
+        createdAt: ts,
+        updatedAt: ts,
+      }));
+      const map: MapRecord = normalizeMap({
+        id: mapId,
+        name: `Generated Dungeon`,
+        subtitle: `Seed: ${params?.seed ?? 'random'}`,
+        region: project.gameTitle || 'Unknown',
+        floor: 'Depths',
+        accent: '#9f3038',
+        style: 'floorplan',
+        notes: '',
+        completion: 0,
+        favorite: false,
+        background: undefined,
+        layers: createDefaultLayers(mapId),
+        rooms: [],
+        paths: [],
+        floorRooms,
+        corridors: [],
+        wallSegments: [],
+        doorways,
+        routeOverlays: [],
+        transitions: [],
+        anchors: [],
+        markers: [],
+        notesBoard: [],
+        zones: [],
+        sketches: [],
+        view: { ...createDefaultView(), renderStyle2d: 'tile' },
+        tileGrid: output.tileGrid,
+      });
+      project.maps.unshift(map);
+      workspace.activeMapId = map.id;
+      workspace.openMapIds.unshift(map.id);
+    });
+  },
   restartOnboarding: () => set({ onboarding: { show: true, step: 0, completed: false, dismissed: false } }),
   nextOnboardingStep: () =>
     set((state) => {

@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ChangeEvent, type PropsWithChildren } from 'react';
+import { useMemo, useRef, useState, type ChangeEvent, type PropsWithChildren } from 'react';
 
 import { SvgMapIcon, builtInIconLibrary } from '../../data/iconLibrary';
 import { findDoorPairSuggestions } from '../../lib/pathfinding';
@@ -12,6 +12,7 @@ import type {
   ProjectRecord,
   TransitionRecord,
 } from '../../models/types';
+import { DEFAULT_GENERATOR_PARAMS, type GeneratorParams } from '../../models/tilemap';
 import { useAppStore } from '../../store/useAppStore';
 import {
   Badge,
@@ -78,7 +79,15 @@ export function RightSidebar({
   const setIconPickerOpen = useAppStore((state) => state.setIconPickerOpen);
   const restartOnboarding = useAppStore((state) => state.restartOnboarding);
   const seedTutorialLinkTarget = useAppStore((state) => state.seedTutorialLinkTarget);
+  const generateDungeon = useAppStore((state) => state.generateDungeon);
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
+  const [genParams, setGenParams] = useState<Partial<GeneratorParams>>({
+    seed: DEFAULT_GENERATOR_PARAMS.seed,
+    algorithm: DEFAULT_GENERATOR_PARAMS.algorithm,
+    roomCountMin: DEFAULT_GENERATOR_PARAMS.roomCountMin,
+    roomCountMax: DEFAULT_GENERATOR_PARAMS.roomCountMax,
+    corridorWidth: DEFAULT_GENERATOR_PARAMS.corridorWidth,
+  });
 
   const selectedId = selection.ids[0];
   const selectedRoom: FloorRoom | undefined =
@@ -495,6 +504,54 @@ export function RightSidebar({
               <TextField label="Game Title" value={project.gameTitle ?? ''} onChange={(event) => updateProjectMeta({ gameTitle: event.target.value })} />
               <TextareaField label="Playthrough Notes" rows={4} value={project.playthroughNotes ?? ''} onChange={(event) => updateProjectMeta({ playthroughNotes: event.target.value })} />
             </InspectorGroup>
+          </Panel>
+
+          <Panel>
+            <SectionTitle eyebrow="Generator" title="Dungeon Generator" />
+            <InspectorGroup title="Parameters">
+              <TextField
+                label="Seed"
+                placeholder="Leave blank for random"
+                value={genParams.seed ?? ''}
+                onChange={(event) => setGenParams((prev) => ({ ...prev, seed: event.target.value }))}
+              />
+              <SelectField
+                label="Algorithm"
+                value={genParams.algorithm ?? 'feature_growth'}
+                onChange={(event) => setGenParams((prev) => ({ ...prev, algorithm: event.target.value as GeneratorParams['algorithm'] }))}
+              >
+                <option value="feature_growth">Feature Growth</option>
+                <option value="grid_rooms">Grid Rooms</option>
+                <option value="bsp">BSP</option>
+              </SelectField>
+              <div className="field-row">
+                <TextField
+                  label="Room Min"
+                  type="number"
+                  value={String(genParams.roomCountMin ?? DEFAULT_GENERATOR_PARAMS.roomCountMin)}
+                  onChange={(event) => setGenParams((prev) => ({ ...prev, roomCountMin: Number(event.target.value) || 1 }))}
+                />
+                <TextField
+                  label="Room Max"
+                  type="number"
+                  value={String(genParams.roomCountMax ?? DEFAULT_GENERATOR_PARAMS.roomCountMax)}
+                  onChange={(event) => setGenParams((prev) => ({ ...prev, roomCountMax: Number(event.target.value) || 1 }))}
+                />
+              </div>
+              <TextField
+                label="Corridor Width"
+                type="number"
+                value={String(genParams.corridorWidth ?? DEFAULT_GENERATOR_PARAMS.corridorWidth)}
+                onChange={(event) => setGenParams((prev) => ({ ...prev, corridorWidth: Number(event.target.value) || 1 }))}
+              />
+            </InspectorGroup>
+            <Button
+              data-testid="generate-dungeon-sidebar"
+              onClick={() => generateDungeon(genParams)}
+              style={{ width: '100%', background: 'var(--crimson)', color: 'var(--bone)', marginTop: 8 }}
+            >
+              Generate
+            </Button>
           </Panel>
         </>
       ) : null}
