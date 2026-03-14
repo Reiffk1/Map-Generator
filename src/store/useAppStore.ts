@@ -2,12 +2,12 @@ import { create } from 'zustand';
 
 import { createBlankProject, createDefaultLayers, createDefaultView, createWorkspaceFromProject, sampleProject } from '../data/sampleProject';
 import { defaultToolSettings, describeRoomPlacement, getMarkerPresetDefinition, getRoomTypeDefinition, getTransitionDefinition } from '../lib/editorPresets';
-import { attachCorridorToFloorplan, buildRoomWalls, rebuildGeneratedWalls } from '../lib/floorplan';
+import { attachCorridorToFloorplan, buildRoomWalls, rebuildGeneratedWalls, snapDoorwayToFloorplan } from '../lib/floorplan';
 import { loadStoredWorkspace, saveStoredWorkspace } from '../lib/persistence';
 import { tutorialSteps, type TutorialTrigger } from '../lib/tutorial';
 import { generateDungeon as runGenerator } from '../lib/generation/generateDungeon';
 import { createEmptyTileGrid } from '../models/tilemap';
-import { carveFloorRect, carveFloorBrush, generateWallsFromFloor } from '../lib/tilemap/walls';
+import { carveFloorRect, carveFloorBrush, generateWallsFromFloor, placeDoors } from '../lib/tilemap/walls';
 import { autotileWallLayer, autotileFloorVariation, STANDARD_WALL_IDS, STANDARD_FLOOR_IDS } from '../lib/tilemap/autotile';
 import { deepClone, makeId } from '../lib/utils';
 import type {
@@ -46,6 +46,14 @@ const EDITOR_GRID_H = 120;
 const EDITOR_TILE_SIZE: 16 | 48 = 16;
 const FLOOR_TILE = 1;
 const WALL_TILE = 2;
+const DOOR_TILE = 3;
+
+const doorwayNormals: Record<DoorwayOrientation, Point> = {
+  north: { x: 0, y: -1 },
+  south: { x: 0, y: 1 },
+  east: { x: 1, y: 0 },
+  west: { x: -1, y: 0 },
+};
 
 const ensureTileGrid = (map: MapRecord) => {
   if (!map.tileGrid) {
@@ -94,6 +102,7 @@ const initialUiState: UiState = {
   theme: 'ember',
   editorMode: 'floorplan',
   activeTool: 'select',
+  focusMode: false,
   toolSettings: defaultToolSettings,
   search: { query: '', scope: 'everything' },
   filters: {
@@ -268,6 +277,35 @@ const corridorFromLegacy = (map: MapRecord, path: PathConnection): CorridorSegme
   updatedAt: path.updatedAt,
 });
 
+const getDoorTilePlacement = (map: MapRecord, doorway: DoorwayRecord) => {
+  if (!map.tileGrid) return undefined;
+
+  const tileSize = map.tileGrid.tileSizePx;
+  const normal = doorwayNormals[doorway.orientation];
+  return {
+    x: Math.floor((doorway.position.x + normal.x * tileSize * 0.5) / tileSize),
+    y: Math.floor((doorway.position.y + normal.y * tileSize * 0.5) / tileSize),
+    tileId: DOOR_TILE,
+  };
+};
+
+const syncDoorwaysToTileGrid = (map: MapRecord) => {
+  if (!map.tileGrid) return;
+
+  map.tileGrid.layers.doors.data.fill(0);
+  generateWallsFromFloor(map.tileGrid, WALL_TILE);
+
+  const doorPlacements = map.doorways
+    .map((doorway) => getDoorTilePlacement(map, doorway))
+    .filter((placement): placement is { x: number; y: number; tileId: number } => placement !== undefined);
+
+  if (doorPlacements.length > 0) {
+    placeDoors(map.tileGrid, doorPlacements);
+  }
+
+  autotileWallLayer(map.tileGrid, STANDARD_WALL_IDS);
+};
+
 const syncMap = (map: MapRecord) => {
   map.corridors = map.corridors.map((corridor) => {
     const attached = attachCorridorToFloorplan(map, corridor.points);
@@ -279,7 +317,6 @@ const syncMap = (map: MapRecord) => {
   });
   map.rooms = map.floorRooms.map(toLegacyRoom);
   map.paths = map.corridors.map(toLegacyPath);
-  map.wallSegments = rebuildGeneratedWalls(map.floorRooms, map.wallSegments, getLayerId(map, 'rooms'));
   for (const entry of map.transitions) {
     if (!entry.doorwayId) {
       const door = transitionToDoorway(map, entry);
@@ -289,20 +326,47 @@ const syncMap = (map: MapRecord) => {
   }
   map.doorways = map.doorways.map((doorway) => {
     const transition = doorway.transitionId ? map.transitions.find((entry) => entry.id === doorway.transitionId) : undefined;
-    return transition
-      ? {
-          ...doorway,
-          label: transition.label,
-          color: transition.color,
-          position: transition.position,
-          transitionType: transition.transitionType,
-          updatedAt: transition.updatedAt,
-        }
-      : doorway;
+    const nextPosition = transition?.position ?? doorway.position;
+    const shouldResnap =
+      doorway.attachedRoomId === undefined ||
+      !map.floorRooms.some((room) => room.id === doorway.attachedRoomId);
+    const snapped = shouldResnap ? snapDoorwayToFloorplan(nextPosition, map) : undefined;
+
+    if (transition && snapped) {
+      transition.position = snapped.position;
+    }
+
+    if (transition) {
+      return {
+        ...doorway,
+        label: transition.label,
+        color: transition.color,
+        position: snapped?.position ?? nextPosition,
+        orientation: snapped?.orientation ?? doorway.orientation,
+        attachedRoomId: snapped?.attachedRoomId ?? doorway.attachedRoomId,
+        transitionType: transition.transitionType,
+        updatedAt: transition.updatedAt,
+      };
+    }
+
+    return {
+      ...doorway,
+      position: snapped?.position ?? doorway.position,
+      orientation: snapped?.orientation ?? doorway.orientation,
+      attachedRoomId: snapped?.attachedRoomId ?? doorway.attachedRoomId,
+    };
   });
   map.doorways = map.doorways.filter(
     (doorway, index, values) => values.findIndex((candidate) => candidate.id === doorway.id) === index,
   );
+  map.wallSegments = rebuildGeneratedWalls(
+    map.floorRooms,
+    map.wallSegments,
+    getLayerId(map, 'rooms'),
+    map.doorways,
+    map.corridors,
+  );
+  syncDoorwaysToTileGrid(map);
 };
 
 const normalizeMap = (source: MapRecord): MapRecord => {
@@ -410,6 +474,7 @@ interface AppStore extends UiState {
   setCommandPaletteOpen: (open: boolean) => void;
   setIconPickerOpen: (open: boolean) => void;
   setInspectorTab: (tab: UiState['inspectorTab']) => void;
+  toggleFocusMode: () => void;
   toggleSidebar: (side: 'left' | 'right' | 'bottom') => void;
   setBottomPanelTab: (tab: UiState['bottomPanelTab']) => void;
   setSearchQuery: (query: string) => void;
@@ -435,7 +500,7 @@ interface AppStore extends UiState {
   addFloorRoom: (bounds: Bounds) => void;
   addCorridor: (points: Point[]) => void;
   addWall: (points: Point[]) => void;
-  addDoorwayAt: (position: Point, orientation?: DoorwayOrientation) => void;
+  addDoorwayAt: (position: Point, orientation?: DoorwayOrientation, attachedRoomId?: string) => void;
   addMarkerAt: (position: Point, iconId?: string) => void;
   addNoteAt: (position: Point) => void;
   addAnchorAt: (position: Point) => void;
@@ -573,6 +638,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setIconPickerOpen: (open) => set({ iconPickerOpen: open }),
   setInspectorTab: (tab) => set({ inspectorTab: tab }),
+  toggleFocusMode: () => set((state) => ({ focusMode: !state.focusMode })),
   toggleSidebar: (side) =>
     set((state) => ({
       showLeftSidebar: side === 'left' ? !state.showLeftSidebar : state.showLeftSidebar,
@@ -934,7 +1000,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       map.wallSegments.push(wall);
       set({ selection: { kind: 'wall', ids: [wall.id] } });
     }),
-  addDoorwayAt: (position, orientation = 'south') => {
+  addDoorwayAt: (position, orientation = 'south', attachedRoomId) => {
     const transitionPreset = getTransitionDefinition(get().toolSettings.transitionType);
     applyWorkspaceChange(set, get, (_workspace, _project, map) => {
       const doorwayId = makeId('doorway');
@@ -949,6 +1015,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         doorwayState: 'open',
         transitionType: transitionPreset.value,
         width: 34,
+        attachedRoomId,
         tags: [],
         noteIds: [],
         transitionId,
@@ -1142,10 +1209,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
       } else if (kind === 'transition') {
         map.transitions = map.transitions.map((entry) => entry.id === id ? { ...entry, position, updatedAt: now() } : entry);
       } else if (kind === 'doorway') {
-        map.doorways = map.doorways.map((entry) => entry.id === id ? { ...entry, position, updatedAt: now() } : entry);
+        const snapped = snapDoorwayToFloorplan(position, map);
+        map.doorways = map.doorways.map((entry) =>
+          entry.id === id
+            ? {
+                ...entry,
+                position: snapped.position,
+                orientation: snapped.orientation,
+                attachedRoomId: snapped.attachedRoomId,
+                updatedAt: now(),
+              }
+            : entry,
+        );
         const transitionId = map.doorways.find((entry) => entry.id === id)?.transitionId;
         if (transitionId) {
-          map.transitions = map.transitions.map((entry) => entry.id === transitionId ? { ...entry, position, updatedAt: now() } : entry);
+          map.transitions = map.transitions.map((entry) =>
+            entry.id === transitionId ? { ...entry, position: snapped.position, updatedAt: now() } : entry,
+          );
         }
       }
       syncMap(map);

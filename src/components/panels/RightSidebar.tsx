@@ -656,7 +656,7 @@ export function RightSidebar({
           <div className="help-list">
             <div><strong>1.</strong><p>`R` room, `C` corridor, `D` doorway, `N` note, `M` overlay, `P` route, `K` sketch, `Delete` erase selected.</p></div>
             <div><strong>2.</strong><p>`1-6` swap modes, `Ctrl/Cmd+K` opens the command palette, `Ctrl/Cmd+D` duplicates the current selection.</p></div>
-            <div><strong>3.</strong><p>`G` toggles the grid, `F` resets the view, and the canvas controls provide persistent fit/zoom buttons.</p></div>
+            <div><strong>3.</strong><p>`G` toggles the grid, `F` toggles focus mode while the workspace view is focused, and the canvas controls provide persistent fit/reset buttons.</p></div>
             <div><strong>4.</strong><p>Use the Links tab to pair doors across maps, then switch to Navigate mode to travel through them safely.</p></div>
           </div>
           <div className="project-card__actions">

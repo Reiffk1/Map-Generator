@@ -91,6 +91,9 @@ img { display: block; max-width: 100%; }
 .app-shell {
   @apply flex flex-col gap-2 p-2 overflow-clip w-full h-dvh;
 }
+.app-shell--focus {
+  @apply gap-0 p-1;
+}
 
 .command-bar {
   @apply flex gap-2.5 items-center justify-between px-2.5 py-2 shrink-0 rounded-3xl border border-[var(--line)] bg-[var(--panel-strong)] shadow-[var(--shadow)];
@@ -156,6 +159,9 @@ img { display: block; max-width: 100%; }
 .center-stage {
   @apply grid gap-2.5 min-w-0 overflow-hidden h-full;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+.center-stage--focus {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .center-panel-shell {
@@ -290,6 +296,18 @@ img { display: block; max-width: 100%; }
 .canvas-shell--3d {
   @apply bg-[#0a0a0b] border-[rgba(196,60,76,0.25)];
 }
+.workspace-canvas-region {
+  @apply relative min-h-0 h-full;
+}
+.workspace-canvas-region:focus {
+  outline: none;
+}
+.workspace-canvas-region--focus {
+  @apply h-full;
+}
+.workspace-canvas-region > .canvas-shell {
+  @apply h-full;
+}
 .canvas-loading-state {
   @apply grid place-items-center min-h-[420px] rounded-[20px] border border-[rgba(196,60,76,0.22)] text-[var(--text-muted)];
   background: linear-gradient(180deg, #121010, #0e0c0c);
@@ -297,12 +315,45 @@ img { display: block; max-width: 100%; }
 .canvas-3d-host { @apply w-full h-full min-h-[360px]; }
 .canvas-3d-host canvas { @apply w-full h-full block; }
 .canvas-3d-overlay {
-  @apply absolute z-[2] top-3 left-3 grid gap-1 px-3 py-2.5 rounded-xl pointer-events-none;
+  @apply absolute z-[2] top-3 left-3 grid gap-2 px-3 py-2.5 rounded-xl;
   background: rgba(10, 10, 11, 0.72);
   border: 1px solid rgba(196, 60, 76, 0.24);
 }
 .canvas-3d-overlay strong { font-family: 'Space Grotesk', sans-serif; }
 .canvas-3d-overlay span { @apply text-[var(--text-muted)] text-[0.82rem]; }
+.canvas-3d-overlay__header {
+  @apply grid gap-1;
+}
+.canvas-3d-overlay__actions {
+  @apply flex gap-2 flex-wrap;
+}
+.canvas-3d-overlay__actions button,
+.focus-mode-overlay button {
+  @apply inline-flex items-center justify-center gap-2 px-3 py-2 text-[var(--text)] rounded-xl cursor-pointer border border-[rgba(255,200,200,0.12)] bg-[rgba(24,20,20,0.88)] transition-all duration-150;
+}
+.canvas-3d-overlay__actions button:hover,
+.focus-mode-overlay button:hover {
+  @apply -translate-y-px border-[var(--line-strong)] bg-[#2c2424];
+}
+.canvas-3d-overlay__actions button.is-active {
+  background: rgba(196, 60, 76, 0.24);
+  border-color: rgba(196, 60, 76, 0.42);
+}
+.canvas-3d-overlay__actions button:disabled,
+.focus-mode-overlay button:disabled {
+  @apply cursor-not-allowed opacity-45;
+}
+.canvas-3d-overlay__hint {
+  @apply text-[0.82rem] text-[var(--ash)];
+  max-width: 280px;
+}
+
+.focus-mode-overlay {
+  @apply absolute top-3 right-3 z-[4] flex gap-2 flex-wrap p-2 rounded-2xl;
+  background: rgba(10, 10, 11, 0.78);
+  border: 1px solid rgba(255, 200, 200, 0.12);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
+}
 
 .canvas-hint-overlay {
   @apply absolute top-[72px] left-3.5 max-w-[320px] flex flex-col gap-4 px-3 py-2.5 rounded-2xl pointer-events-none;
@@ -615,5 +666,8 @@ img { display: block; max-width: 100%; }
   }
   .tool-rail-vertical__btn {
     @apply min-w-[72px];
+  }
+  .focus-mode-overlay {
+    @apply left-3 right-3 top-3;
   }
 }

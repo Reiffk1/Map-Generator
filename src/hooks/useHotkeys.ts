@@ -154,10 +154,6 @@ export const useHotkeys = () => {
       if (key === 'p') setActiveTool('route');
       if (key === 'x') setActiveTool('erase');
 
-      if (key === 'f') {
-        updateMapView({ zoom: 1, pan: { x: 0, y: 0 } });
-      }
-
       if (key === 'g') {
         const current = useAppStore.getState();
         updateMapView({

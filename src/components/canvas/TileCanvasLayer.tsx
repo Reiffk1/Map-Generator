@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image as KonvaImage } from 'react-konva';
 import Konva from 'konva';
 
@@ -31,10 +31,13 @@ export function TileCanvasLayer({
   panX,
   panY,
 }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imageNode = useMemo(
+    () => (typeof document === 'undefined' ? null : document.createElement('canvas')),
+    [],
+  );
+  const canvasRef = useRef<HTMLCanvasElement | null>(imageNode);
   const cacheRef = useRef<TileRenderCache>(createRenderCache());
   const [pack, setPack] = useState<LoadedAssetPack | null>(null);
-  const [imageNode, setImageNode] = useState<HTMLCanvasElement | null>(null);
   const konvaRef = useRef<Konva.Image | null>(null);
 
   useEffect(() => {
@@ -48,11 +51,8 @@ export function TileCanvasLayer({
   useEffect(() => {
     if (!viewportWidth || !viewportHeight) return;
 
-    let canvas = canvasRef.current;
-    if (!canvas) {
-      canvas = document.createElement('canvas');
-      canvasRef.current = canvas;
-    }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
     const pixelW = Math.ceil(grid.width * grid.tileSizePx);
     const pixelH = Math.ceil(grid.height * grid.tileSizePx);
@@ -73,18 +73,16 @@ export function TileCanvasLayer({
       zoom: 1,
     }, true);
 
-    setImageNode(canvas);
     if (konvaRef.current) {
+      konvaRef.current.image(canvas);
       konvaRef.current.getLayer()?.batchDraw();
     }
   }, [grid, pack, viewportWidth, viewportHeight, zoom, panX, panY]);
 
-  if (!imageNode) return null;
-
   return (
     <KonvaImage
       ref={konvaRef}
-      image={imageNode}
+      image={imageNode ?? undefined}
       x={0}
       y={0}
       width={grid.width * grid.tileSizePx}

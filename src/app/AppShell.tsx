@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { toast } from 'sonner';
 import { Group as PanelGroup, Panel as ResizablePanel, Separator as PanelResizeHandle } from 'react-resizable-panels';
 
@@ -9,6 +9,7 @@ import { getLegendForMap, getProjectStats, getReviewItems, getSearchResults } fr
 import { runAccessibilityAudit } from '../lib/accessibility';
 import { downloadDataUrl, downloadTextFile } from '../lib/utils';
 import { MapCanvas, type MapCanvasHandle } from '../components/canvas/MapCanvas';
+import type { MapThreePreviewHandle } from '../components/canvas/MapThreePreview';
 import { BottomPanel } from '../components/panels/BottomPanel';
 import { CommandPalette } from '../components/panels/CommandPalette';
 import { IconPickerModal } from '../components/panels/IconPickerModal';
@@ -39,6 +40,17 @@ const readJsonFile = (file: File) =>
     reader.onerror = () => reject(reader.error);
     reader.readAsText(file);
   });
+
+const isTypingTarget = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  return (
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement ||
+    element.isContentEditable ||
+    element.closest('[data-hotkey-scope="editor-form"]') !== null
+  );
+};
 
 const modes = [
   { value: 'floorplan', label: 'Draft', shortLabel: 'Draft', icon: 'floorplan' },
@@ -71,6 +83,7 @@ export function AppShell() {
   useHotkeys();
 
   const canvasRef = useRef<MapCanvasHandle | null>(null);
+  const previewRef = useRef<MapThreePreviewHandle | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [isCompactLayout, setIsCompactLayout] = useState(
     typeof window !== 'undefined' ? window.innerWidth <= 1120 : false,
@@ -103,9 +116,11 @@ export function AppShell() {
   const importProject = useAppStore((state) => state.importProject);
   const markActiveMapReviewed = useAppStore((state) => state.markActiveMapReviewed);
   const clearActiveMap = useAppStore((state) => state.clearActiveMap);
+  const focusMode = useAppStore((state) => state.focusMode);
   const showLeftSidebar = useAppStore((state) => state.showLeftSidebar);
   const showRightSidebar = useAppStore((state) => state.showRightSidebar);
   const showBottomPanel = useAppStore((state) => state.showBottomPanel);
+  const toggleFocusMode = useAppStore((state) => state.toggleFocusMode);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
   const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
   const generateDungeon = useAppStore((state) => state.generateDungeon);
@@ -117,8 +132,8 @@ export function AppShell() {
   const searchResults = getSearchResults(project, search.query);
   const legend = getLegendForMap(map);
   const routePlan = buildRoutePlan(project, routePlannerStart, routePlannerEnd);
-  const hasLeftSidebar = showLeftSidebar && !isCompactLayout;
-  const hasRightSidebar = showRightSidebar && !isCompactLayout;
+  const hasLeftSidebar = !focusMode && showLeftSidebar && !isCompactLayout;
+  const hasRightSidebar = !focusMode && showRightSidebar && !isCompactLayout;
   const centerPanelDefaultSize = hasLeftSidebar && hasRightSidebar ? 62 : hasLeftSidebar ? 82 : hasRightSidebar ? 80 : 100;
   // (All modes/tools are rendered in the vertical rail, no primary/secondary split needed)
 
@@ -186,6 +201,29 @@ export function AppShell() {
     if (!confirmed) return;
     clearActiveMap();
     toast(`Cleared ${map.name}.`);
+  };
+
+  const handleCanvasRegionKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (isTypingTarget(event.target)) return;
+
+    if (event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      toggleFocusMode();
+      return;
+    }
+
+    if (event.key === 'Escape' && focusMode) {
+      event.preventDefault();
+      toggleFocusMode();
+    }
+  };
+
+  const handleReset2dView = () => {
+    canvasRef.current?.fitToMap();
+  };
+
+  const handleReset3dCamera = () => {
+    previewRef.current?.resetCamera();
   };
 
   const toolContext = useMemo(() => {
@@ -346,7 +384,8 @@ export function AppShell() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${focusMode ? ' app-shell--focus' : ''}`}>
+      {!focusMode ? (
       <header className="command-bar">
         <div className="command-bar__workspace-switcher">
           <div className="command-bar__logo">WA</div>
@@ -417,6 +456,7 @@ export function AppShell() {
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setCommandPaletteOpen(true)}>Open Command Palette</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => toggleSidebar('bottom')}>Toggle Drawer</DropdownMenuItem>
+              <DropdownMenuItem onSelect={toggleFocusMode}>Enter Focus Mode</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={markActiveMapReviewed}>Mark Map Reviewed</DropdownMenuItem>
               <DropdownMenuItem onSelect={navigateBack}>Back</DropdownMenuItem>
@@ -433,8 +473,9 @@ export function AppShell() {
           <BadgeState saveState={saveState} />
         </div>
       </header>
+      ) : null}
 
-      <PanelGroup orientation="horizontal" className="flex-1 min-h-0 min-w-0 gap-1">
+      <PanelGroup orientation="horizontal" className={`flex-1 min-h-0 min-w-0 ${focusMode ? 'gap-0' : 'gap-1'}`}>
         {hasLeftSidebar ? (
           <>
             <ResizablePanel defaultSize={18} minSize={14} maxSize={30} className="min-h-0 h-full">
@@ -452,6 +493,7 @@ export function AppShell() {
 
         <ResizablePanel defaultSize={centerPanelDefaultSize} minSize={40} className="min-h-0">
           <div className="center-panel-shell">
+            {!focusMode ? (
             <div className="tool-rail-vertical" data-testid="tool-rail">
               <div className="tool-rail-vertical__group">
                 <span className="tool-rail-vertical__label">Mode</span>
@@ -487,7 +529,9 @@ export function AppShell() {
                 ))}
               </div>
             </div>
-            <section className="center-stage">
+            ) : null}
+            <section className={`center-stage${focusMode ? ' center-stage--focus' : ''}`}>
+            {!focusMode ? (
             <div className="center-stage__bar">
               <div className="map-tabs" data-testid="map-tabs">
                 {workspace.openMapIds.map((mapId) => {
@@ -521,9 +565,11 @@ export function AppShell() {
                 })}
               </div>
             </div>
+            ) : null}
 
-            {toolContext ? <div className="editor-strip">{toolContext}</div> : null}
+            {!focusMode && toolContext ? <div className="editor-strip">{toolContext}</div> : null}
 
+            {!focusMode ? (
             <div className="canvas-meta-strip">
               <div>
                 <strong>{map.name}</strong>
@@ -536,16 +582,33 @@ export function AppShell() {
                 <span>{Math.round(map.view.zoom * 100)}%</span>
               </div>
             </div>
+            ) : null}
 
-            {map.view.renderMode === 'preview_3d' ? (
-              <Suspense fallback={<div className="canvas-loading-state">Loading cinematic preview...</div>}>
-                <MapThreePreview map={map} />
-              </Suspense>
-            ) : (
-              <MapCanvas ref={canvasRef} map={map} project={project} />
-            )}
+            <div
+              className={`workspace-canvas-region${focusMode ? ' workspace-canvas-region--focus' : ''}`}
+              data-canvas-region="true"
+              onKeyDown={handleCanvasRegionKeyDown}
+              onPointerDown={(event) => event.currentTarget.focus()}
+              tabIndex={0}
+            >
+              {map.view.renderMode === 'preview_3d' ? (
+                <Suspense fallback={<div className="canvas-loading-state">Loading cinematic preview...</div>}>
+                  <MapThreePreview ref={previewRef} map={map} />
+                </Suspense>
+              ) : (
+                <MapCanvas ref={canvasRef} map={map} project={project} />
+              )}
 
-            {showBottomPanel ? (
+              {focusMode ? (
+                <div className="focus-mode-overlay">
+                  <button onClick={toggleFocusMode} type="button">Exit Focus</button>
+                  <button disabled={map.view.renderMode !== 'editor_2d'} onClick={handleReset2dView} type="button">Fit to Map</button>
+                  <button disabled={map.view.renderMode !== 'preview_3d'} onClick={handleReset3dCamera} type="button">Reset Camera</button>
+                </div>
+              ) : null}
+            </div>
+
+            {!focusMode && showBottomPanel ? (
               <BottomPanel
                 legend={legend}
                 project={project}

@@ -49,9 +49,16 @@ export function placeDoors(
   doorPositions: Array<{ x: number; y: number; tileId: number }>,
 ): void {
   const doorLayer = grid.layers.doors;
+  const floorLayer = grid.layers.floor;
   const wallLayer = grid.layers.walls;
 
   for (const { x, y, tileId } of doorPositions) {
+    if (!inBounds(grid, x, y)) continue;
+    if (getTile(floorLayer, grid, x, y) === TILE_EMPTY) {
+      // Keep a traversable threshold under the door so wall regeneration
+      // does not immediately reseal the opening on the next pass.
+      setTile(floorLayer, grid, x, y, 1);
+    }
     setTile(doorLayer, grid, x, y, tileId);
     setTile(wallLayer, grid, x, y, TILE_EMPTY);
   }

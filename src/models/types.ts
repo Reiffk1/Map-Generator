@@ -668,6 +668,7 @@ export interface UiState {
   theme: AppTheme;
   editorMode: EditorMode;
   activeTool: ToolType;
+  focusMode: boolean;
   toolSettings: ToolSettings;
   search: SearchState;
   filters: FilterState;

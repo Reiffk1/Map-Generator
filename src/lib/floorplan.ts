@@ -2,6 +2,7 @@ import type {
   Bounds,
   CorridorSegment,
   DoorwayOrientation,
+  DoorwayRecord,
   FloorRoom,
   MapRecord,
   Point,
@@ -11,8 +12,12 @@ import { clamp, distanceBetween } from './utils';
 
 const ROOM_ATTACH_DISTANCE = 120;
 const DOORWAY_ATTACH_DISTANCE = 96;
+const WALL_OPENING_TOLERANCE = 6;
+const CORRIDOR_ENDPOINT_EPSILON = 2;
+const GENERATED_WALL_TAG = 'generated-room-wall';
 
 const roomWallIds = (roomId: string) => [`${roomId}_n`, `${roomId}_e`, `${roomId}_s`, `${roomId}_w`];
+const roomSidePattern = /^(.*)_(n|e|s|w)(?:__\d+)?$/;
 
 const roomDistanceToPoint = (room: FloorRoom, point: Point) => {
   const dx = Math.max(room.bounds.x - point.x, 0, point.x - (room.bounds.x + room.bounds.width));
@@ -117,36 +122,227 @@ const snapCorridorEndpoint = (point: Point, rooms: FloorRoom[]) => {
 };
 
 export const buildRoomWalls = (layerId: string, room: FloorRoom): WallSegment[] => {
-  const { x, y, width, height } = room.bounds;
-  const build = (suffix: string, points: Point[]): WallSegment => ({
-    id: `${room.id}_${suffix}`,
-    layerId,
-    points,
-    thickness: 18,
-    color: '#170d10',
-    state: 'open',
-    tags: [],
-    noteIds: [],
-    createdAt: room.createdAt,
-    updatedAt: room.updatedAt,
-  });
+  return buildRoomWallsWithOpenings(layerId, room, [], []);
+};
 
-  return [
-    build('n', [{ x, y }, { x: x + width, y }]),
-    build('e', [{ x: x + width, y }, { x: x + width, y: y + height }]),
-    build('s', [{ x: x + width, y: y + height }, { x, y: y + height }]),
-    build('w', [{ x, y: y + height }, { x, y }]),
-  ];
+type RoomWallSide = 'n' | 'e' | 's' | 'w';
+
+type OpeningInterval = {
+  start: number;
+  end: number;
+};
+
+const buildRoomWallSegment = (
+  layerId: string,
+  room: FloorRoom,
+  side: RoomWallSide,
+  index: number,
+  points: Point[],
+): WallSegment => ({
+  id: `${room.id}_${side}__${index}`,
+  layerId,
+  points,
+  thickness: 18,
+  color: '#170d10',
+  state: 'open',
+  tags: [GENERATED_WALL_TAG, `room:${room.id}`, `side:${side}`],
+  noteIds: [],
+  createdAt: room.createdAt,
+  updatedAt: room.updatedAt,
+});
+
+const clampOpeningToWall = (center: number, width: number, min: number, max: number): OpeningInterval | null => {
+  const halfWidth = width / 2;
+  const start = clamp(center - halfWidth, min, max);
+  const end = clamp(center + halfWidth, min, max);
+  if (end - start <= 1) return null;
+  return { start, end };
+};
+
+const mergeOpenings = (openings: OpeningInterval[]) => {
+  if (openings.length === 0) return [];
+
+  const sorted = [...openings].sort((left, right) => left.start - right.start);
+  const merged: OpeningInterval[] = [sorted[0]!];
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index]!;
+    const previous = merged[merged.length - 1]!;
+    if (current.start <= previous.end + 1) {
+      previous.end = Math.max(previous.end, current.end);
+      continue;
+    }
+    merged.push({ ...current });
+  }
+
+  return merged;
+};
+
+const getSideWallRange = (room: FloorRoom, side: RoomWallSide) => {
+  const { x, y, width, height } = room.bounds;
+
+  if (side === 'n' || side === 's') {
+    return {
+      min: x,
+      max: x + width,
+      fixed: side === 'n' ? y : y + height,
+    };
+  }
+
+  return {
+    min: y,
+    max: y + height,
+    fixed: side === 'e' ? x + width : x,
+  };
+};
+
+const getSidePoints = (side: RoomWallSide, fixed: number, start: number, end: number): Point[] => {
+  if (side === 'n') return [{ x: start, y: fixed }, { x: end, y: fixed }];
+  if (side === 'e') return [{ x: fixed, y: start }, { x: fixed, y: end }];
+  if (side === 's') return [{ x: end, y: fixed }, { x: start, y: fixed }];
+  return [{ x: fixed, y: end }, { x: fixed, y: start }];
+};
+
+const sideForOrientation = (orientation: DoorwayOrientation): RoomWallSide => {
+  if (orientation === 'north') return 'n';
+  if (orientation === 'east') return 'e';
+  if (orientation === 'south') return 's';
+  return 'w';
+};
+
+const collectDoorOpeningsForSide = (
+  room: FloorRoom,
+  side: RoomWallSide,
+  doorways: DoorwayRecord[],
+): OpeningInterval[] => {
+  const sideRange = getSideWallRange(room, side);
+
+  return doorways
+    .filter((doorway) => doorway.attachedRoomId === room.id && sideForOrientation(doorway.orientation) === side)
+    .map((doorway) =>
+      clampOpeningToWall(
+        side === 'n' || side === 's' ? doorway.position.x : doorway.position.y,
+        doorway.width + WALL_OPENING_TOLERANCE,
+        sideRange.min,
+        sideRange.max,
+      ),
+    )
+    .filter((opening): opening is OpeningInterval => opening !== null);
+};
+
+const corridorEndpointOpensSide = (room: FloorRoom, side: RoomWallSide, point: Point) => {
+  const { x, y, width, height } = room.bounds;
+
+  if (side === 'n') {
+    return Math.abs(point.y - y) <= CORRIDOR_ENDPOINT_EPSILON && point.x >= x - CORRIDOR_ENDPOINT_EPSILON && point.x <= x + width + CORRIDOR_ENDPOINT_EPSILON;
+  }
+  if (side === 's') {
+    return Math.abs(point.y - (y + height)) <= CORRIDOR_ENDPOINT_EPSILON && point.x >= x - CORRIDOR_ENDPOINT_EPSILON && point.x <= x + width + CORRIDOR_ENDPOINT_EPSILON;
+  }
+  if (side === 'e') {
+    return Math.abs(point.x - (x + width)) <= CORRIDOR_ENDPOINT_EPSILON && point.y >= y - CORRIDOR_ENDPOINT_EPSILON && point.y <= y + height + CORRIDOR_ENDPOINT_EPSILON;
+  }
+  return Math.abs(point.x - x) <= CORRIDOR_ENDPOINT_EPSILON && point.y >= y - CORRIDOR_ENDPOINT_EPSILON && point.y <= y + height + CORRIDOR_ENDPOINT_EPSILON;
+};
+
+const collectCorridorOpeningsForSide = (
+  room: FloorRoom,
+  side: RoomWallSide,
+  corridors: CorridorSegment[],
+): OpeningInterval[] => {
+  const sideRange = getSideWallRange(room, side);
+  const openings: OpeningInterval[] = [];
+
+  for (const corridor of corridors) {
+    const endpoints = [corridor.points[0], corridor.points[corridor.points.length - 1]].filter(Boolean) as Point[];
+    for (const endpoint of endpoints) {
+      if (!corridorEndpointOpensSide(room, side, endpoint)) continue;
+      const opening = clampOpeningToWall(
+        side === 'n' || side === 's' ? endpoint.x : endpoint.y,
+        corridor.width,
+        sideRange.min,
+        sideRange.max,
+      );
+      if (opening) openings.push(opening);
+    }
+  }
+
+  return openings;
+};
+
+export const buildRoomWallsWithOpenings = (
+  layerId: string,
+  room: FloorRoom,
+  mapDoorways: DoorwayRecord[],
+  mapCorridors: CorridorSegment[],
+): WallSegment[] => {
+  const sides: RoomWallSide[] = ['n', 'e', 's', 'w'];
+  const segments: WallSegment[] = [];
+
+  for (const side of sides) {
+    const { min, max, fixed } = getSideWallRange(room, side);
+    const openings = mergeOpenings([
+      ...collectDoorOpeningsForSide(room, side, mapDoorways),
+      ...collectCorridorOpeningsForSide(room, side, mapCorridors),
+    ]);
+
+    let cursor = min;
+    let segmentIndex = 0;
+
+    for (const opening of openings) {
+      if (opening.start - cursor > 1) {
+        segments.push(
+          buildRoomWallSegment(layerId, room, side, segmentIndex, getSidePoints(side, fixed, cursor, opening.start)),
+        );
+        segmentIndex += 1;
+      }
+      cursor = Math.max(cursor, opening.end);
+    }
+
+    if (max - cursor > 1) {
+      segments.push(
+        buildRoomWallSegment(layerId, room, side, segmentIndex, getSidePoints(side, fixed, cursor, max)),
+      );
+    }
+  }
+
+  return segments;
+};
+
+export const getGeneratedRoomWallRoomId = (
+  wall: Pick<WallSegment, 'id' | 'tags'>,
+  roomIds?: Iterable<string>,
+): string | undefined => {
+  const taggedRoomId = wall.tags.find((tag) => tag.startsWith('room:'));
+  if (wall.tags.includes(GENERATED_WALL_TAG) && taggedRoomId) {
+    return taggedRoomId.slice('room:'.length);
+  }
+
+  const match = wall.id.match(roomSidePattern);
+  if (!match) return undefined;
+
+  const roomId = match[1];
+  if (!roomIds) return roomId;
+
+  const knownRoomIds = roomIds instanceof Set ? roomIds : new Set(roomIds);
+  return knownRoomIds.has(roomId) ? roomId : undefined;
 };
 
 export const rebuildGeneratedWalls = (
   rooms: FloorRoom[],
   walls: WallSegment[],
   layerId: string,
+  mapDoorways: DoorwayRecord[],
+  mapCorridors: CorridorSegment[],
 ) => {
+  const knownRoomIds = new Set(rooms.map((room) => room.id));
   const generatedIds = new Set(rooms.flatMap((room) => roomWallIds(room.id)));
-  const manualWalls = walls.filter((wall) => !generatedIds.has(wall.id));
-  return [...rooms.flatMap((room) => buildRoomWalls(layerId, room)), ...manualWalls];
+  const manualWalls = walls.filter((wall) => {
+    if (wall.tags.includes(GENERATED_WALL_TAG)) return false;
+    if (generatedIds.has(wall.id)) return false;
+    return !getGeneratedRoomWallRoomId(wall, knownRoomIds);
+  });
+  return [...rooms.flatMap((room) => buildRoomWallsWithOpenings(layerId, room, mapDoorways, mapCorridors)), ...manualWalls];
 };
 
 export const attachCorridorToFloorplan = (map: MapRecord, points: Point[]) => {

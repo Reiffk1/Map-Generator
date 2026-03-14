@@ -14,7 +14,7 @@ import useImage from 'use-image';
 
 import { builtInIconLibrary, type IconPalette, type IconPrimitive } from '../../data/iconLibrary';
 import { TileCanvasLayer } from './TileCanvasLayer';
-import { getMapContentBounds, snapDoorwayToFloorplan } from '../../lib/floorplan';
+import { getGeneratedRoomWallRoomId, getMapContentBounds, snapDoorwayToFloorplan } from '../../lib/floorplan';
 import { clamp } from '../../lib/utils';
 import type {
   MapRecord,
@@ -393,6 +393,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     const stageRef = useRef<Konva.Stage | null>(null);
     const grainRef = useRef<Konva.Rect | null>(null);
     const fittedMapsRef = useRef<Set<string>>(new Set());
+    const defaultDragButtonsRef = useRef([...Konva.dragButtons]);
     const { ref: containerRef, size } = useElementSize<HTMLDivElement>();
     const [backgroundImage] = useImage(map.background?.src ?? '', 'anonymous');
     const [stonekeepRoomImage] = useImage(dungeonTextures.stonekeep.room, 'anonymous');
@@ -580,6 +581,33 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       node.getLayer()?.batchDraw();
     }, [map.id, map.view.floorSurfaceStyle]);
 
+    useEffect(() => {
+      const stage = stageRef.current;
+      if (!stage) return;
+
+      const container = stage.container();
+      const restoreDragButtons = () => {
+        Konva.dragButtons = [...defaultDragButtonsRef.current];
+      };
+      const syncDragButtons = (event: MouseEvent) => {
+        Konva.dragButtons = event.button === 2 ? [2] : [...defaultDragButtonsRef.current];
+      };
+      const preventContextMenu = (event: MouseEvent) => {
+        event.preventDefault();
+      };
+
+      container.addEventListener('mousedown', syncDragButtons, true);
+      container.addEventListener('contextmenu', preventContextMenu);
+      window.addEventListener('mouseup', restoreDragButtons);
+
+      return () => {
+        container.removeEventListener('mousedown', syncDragButtons, true);
+        container.removeEventListener('contextmenu', preventContextMenu);
+        window.removeEventListener('mouseup', restoreDragButtons);
+        restoreDragButtons();
+      };
+    }, []);
+
     const getWorldPosition = () => {
       const stage = stageRef.current;
       if (!stage) return undefined;
@@ -597,16 +625,36 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       setDraftPath([point]);
     };
 
+    const handOffRightButtonDragToStage = (event: KonvaEventObject<MouseEvent>) => {
+      if (event.evt.button !== 2) return;
+      const stage = stageRef.current;
+      if (!stage) return;
+
+      event.target.stopDrag();
+      stage.startDrag(event.evt);
+    };
+
+    const finishEntityDrag = (kind: 'floor_room' | 'doorway' | 'marker' | 'note' | 'anchor', id: string) =>
+      (event: KonvaEventObject<DragEvent>) => {
+        if (event.evt.button === 2) return;
+        moveEntity(kind, id, { x: event.target.x(), y: event.target.y() });
+      };
+
     const handleEntitySelection = (
       kind: Exclude<typeof selection.kind, 'none' | 'path' | 'zone'>,
       id: string,
       options?: { destinationMapId?: string; destinationAnchorId?: string },
     ) => (event?: KonvaEventObject<MouseEvent>) => {
+      if (event?.evt.button === 2) {
+        event.evt.preventDefault();
+        return;
+      }
+
       if (activeTool === 'erase') {
         if (kind === 'wall' && toolSettings.eraseMode === 'entity') {
-          const roomMatch = id.match(/(.+)_(n|e|s|w)$/);
-          if (roomMatch && map.floorRooms.some((room) => room.id === roomMatch[1])) {
-            deleteEntity('floor_room', roomMatch[1]);
+          const roomId = getGeneratedRoomWallRoomId({ id, tags: [] }, map.floorRooms.map((room) => room.id));
+          if (roomId && map.floorRooms.some((room) => room.id === roomId)) {
+            deleteEntity('floor_room', roomId);
             return;
           }
         }
@@ -623,13 +671,18 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     };
 
     const stageMouseDown = (event: KonvaEventObject<MouseEvent>) => {
+      if (event.evt.button === 2) {
+        event.evt.preventDefault();
+        return;
+      }
+
       const isBlank = event.target === event.target.getStage();
       const position = getWorldPosition();
       if (!position) return;
 
       if (activeTool === 'doorway') {
         const snapped = snapDoorwayToFloorplan(position, map);
-        addDoorwayAt(snapped.position, snapped.orientation);
+        addDoorwayAt(snapped.position, snapped.orientation, snapped.attachedRoomId);
         return;
       }
 
@@ -707,7 +760,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       setDraftPath((current) => [...current, position]);
     };
 
-    const stageMouseUp = () => {
+    const stageMouseUp = (event: KonvaEventObject<MouseEvent>) => {
+      if (event.evt.button === 2) return;
+
       if (draftRect) {
         const x = Math.min(draftRect.start.x, draftRect.current.x);
         const y = Math.min(draftRect.start.y, draftRect.current.y);
@@ -798,8 +853,14 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           y={map.view.pan.y}
           scaleX={map.view.zoom}
           scaleY={map.view.zoom}
-          draggable={activeTool === 'select' && draftKind === null && !draftRect}
+          draggable={draftKind === null && !draftRect}
+          onDragStart={(event) => {
+            if (event.evt.button !== 2) {
+              event.target.stopDrag();
+            }
+          }}
           onDragEnd={(event) => updateMapView({ pan: { x: event.target.x(), y: event.target.y() } })}
+          onContextMenu={(event) => event.evt.preventDefault()}
           onMouseDown={stageMouseDown}
           onMouseMove={stageMouseMove}
           onMouseUp={stageMouseUp}
@@ -950,7 +1011,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                       draggable={editorMode !== 'navigate' && activeTool === 'select'}
                       key={room.id}
                       onClick={handleEntitySelection('floor_room', room.id)}
-                      onDragEnd={(event) => moveEntity('floor_room', room.id, { x: event.target.x(), y: event.target.y() })}
+                      onDragStart={handOffRightButtonDragToStage}
+                      onDragEnd={finishEntityDrag('floor_room', room.id)}
                       x={room.bounds.x}
                       y={room.bounds.y}
                       opacity={isTileMode ? (isSelected ? 0.6 : 0.15) : 1}
@@ -1019,9 +1081,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                       onClick={() => {
                         if (activeTool !== 'erase') return;
                         if (toolSettings.eraseMode === 'entity') {
-                          const roomMatch = wall.id.match(/(.+)_(n|e|s|w)$/);
-                          if (roomMatch && map.floorRooms.some((room) => room.id === roomMatch[1])) {
-                            deleteEntity('floor_room', roomMatch[1]);
+                          const roomId = getGeneratedRoomWallRoomId(wall, map.floorRooms.map((room) => room.id));
+                          if (roomId && map.floorRooms.some((room) => room.id === roomId)) {
+                            deleteEntity('floor_room', roomId);
                             return;
                           }
                         }
@@ -1056,7 +1118,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                         destinationMapId: linked?.destinationMapId,
                         destinationAnchorId: linked?.destinationAnchorId,
                       })}
-                      onDragEnd={(event) => moveEntity('doorway', doorway.id, { x: event.target.x(), y: event.target.y() })}
+                      onDragStart={handOffRightButtonDragToStage}
+                      onDragEnd={finishEntityDrag('doorway', doorway.id)}
                       x={doorway.position.x}
                       y={doorway.position.y}
                     >
@@ -1203,7 +1266,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                     draggable={editorMode !== 'navigate' && activeTool === 'select'}
                     key={entry.id}
                     onClick={handleEntitySelection('marker', entry.id)}
-                    onDragEnd={(event) => moveEntity('marker', entry.id, { x: event.target.x(), y: event.target.y() })}
+                    onDragStart={handOffRightButtonDragToStage}
+                    onDragEnd={finishEntityDrag('marker', entry.id)}
                     x={entry.position.x}
                     y={entry.position.y}
                   >
@@ -1226,7 +1290,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                     draggable={editorMode !== 'navigate' && activeTool === 'select'}
                     key={entry.id}
                     onClick={handleEntitySelection('note', entry.id)}
-                    onDragEnd={(event) => moveEntity('note', entry.id, { x: event.target.x(), y: event.target.y() })}
+                    onDragStart={handOffRightButtonDragToStage}
+                    onDragEnd={finishEntityDrag('note', entry.id)}
                     x={entry.position.x}
                     y={entry.position.y}
                   >
@@ -1252,7 +1317,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                     draggable={editorMode !== 'navigate' && activeTool === 'select'}
                     key={entry.id}
                     onClick={handleEntitySelection('anchor', entry.id)}
-                    onDragEnd={(event) => moveEntity('anchor', entry.id, { x: event.target.x(), y: event.target.y() })}
+                    onDragStart={handOffRightButtonDragToStage}
+                    onDragEnd={finishEntityDrag('anchor', entry.id)}
                     x={entry.position.x}
                     y={entry.position.y}
                   >
@@ -1347,7 +1413,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
         <div className="canvas-controls-overlay">
           <button aria-label="Zoom out canvas" data-testid="zoom-out-button" onClick={() => applyZoom(clamp(map.view.zoom / 1.12, 0.32, 3))} type="button">-</button>
           <button aria-label="Zoom in canvas" data-testid="zoom-in-button" onClick={() => applyZoom(clamp(map.view.zoom * 1.12, 0.32, 3))} type="button">+</button>
-          <button aria-label="Fit map to canvas" data-testid="fit-map-button" onClick={() => fitToMap()} type="button">Fit</button>
+          <button aria-label="Fit map to canvas" data-testid="fit-map-button" onClick={() => fitToMap()} type="button">Fit to Map</button>
           {selection.kind !== 'none' ? (
             <button aria-label="Fit selection to canvas" data-testid="fit-selection-button" onClick={() => fitSelection()} type="button">Sel</button>
           ) : null}

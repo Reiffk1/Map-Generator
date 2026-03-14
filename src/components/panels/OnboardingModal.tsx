@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 import { tutorialSteps } from '../../lib/tutorial';
@@ -65,7 +65,7 @@ export function OnboardingModal() {
     };
   })();
 
-  const revealTarget = () => {
+  const revealTarget = useCallback(() => {
     if (step.id === 'create-map' && !showLeftSidebar) toggleSidebar('left');
     if (step.id === 'link-door' && !showRightSidebar) toggleSidebar('right');
     if (step.id === 'review' && !showBottomPanel) toggleSidebar('bottom');
@@ -75,7 +75,7 @@ export function OnboardingModal() {
       element?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
       setViewportVersion((value) => value + 1);
     }, 120);
-  };
+  }, [showBottomPanel, showLeftSidebar, showRightSidebar, step.id, step.selector, toggleSidebar]);
 
   useEffect(() => {
     if (!onboarding.show) return;
@@ -91,7 +91,7 @@ export function OnboardingModal() {
   useEffect(() => {
     if (!onboarding.show) return;
     revealTarget();
-  }, [onboarding.show, onboarding.step, showBottomPanel, showLeftSidebar, showRightSidebar]);
+  }, [onboarding.show, onboarding.step, revealTarget]);
 
   const runStepAction = () => {
     switch (step.actionId) {
