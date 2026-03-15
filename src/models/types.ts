@@ -14,18 +14,21 @@ export type ToolType =
   | 'corridor'
   | 'wall'
   | 'doorway'
+  | 'prop'
   | 'marker'
   | 'note'
   | 'anchor'
   | 'route'
   | 'sketch'
-  | 'erase';
+  | 'erase'
+  | 'measure';
 
 export type MapStyle = 'floorplan' | 'graph' | 'hybrid';
 
 export type EntityState =
   | 'unknown'
   | 'seen'
+  | 'hidden'
   | 'visited'
   | 'cleared'
   | 'completed'
@@ -39,6 +42,7 @@ export type EntityState =
   | 'urgent_revisit';
 
 export type PathState =
+  | 'seen'
   | 'confirmed'
   | 'uncertain'
   | 'blocked'
@@ -120,13 +124,15 @@ export type FloorRoomType =
   | 'junction'
   | 'stairs';
 
-export type RoomPlacementMode = 'rectangle' | 'stamp';
+export type RoomPlacementMode = 'rectangle' | 'stamp' | 'paint';
 
 export type MarkerPlacementPreset = 'hazard' | 'loot' | 'chest' | 'secret' | 'save' | 'npc';
 
 export type DoorwayOrientation = 'north' | 'south' | 'east' | 'west';
 
 export type DoorwayState = 'open' | 'locked' | 'hidden' | 'sealed' | 'suspected';
+
+export type ViewMode = 'plan_2d' | 'second_follow' | 'third_orbit' | 'first_walk';
 
 export type LayerType =
   | 'background'
@@ -354,12 +360,22 @@ export interface DoorwayRecord {
   doorwayState: DoorwayState;
   transitionType: TransitionType;
   width: number;
+  doorStyleId?: string;
   attachedRoomId?: string;
   transitionId?: string;
   tags: string[];
   noteIds: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PropRecord extends EntityBase {
+  kind: 'prop';
+  assetId: string;
+  position: Point;
+  orientation?: DoorwayOrientation;
+  scale: number;
+  rotationDeg: number;
 }
 
 export interface TransitionRecord extends EntityBase {
@@ -464,9 +480,11 @@ export interface MapViewSettings {
   zoom: number;
   pan: Point;
   hasUserAdjusted: boolean;
-  renderMode: 'editor_2d' | 'preview_3d';
+  viewMode: ViewMode;
+  fogMode3d: 'radius' | 'cone';
   renderStyle2d: 'vector' | 'tile';
   assetPackId: string;
+  stylePackId: 'stonekeep' | 'parchment' | 'pixel' | 'ink' | 'battlemap';
   showGrid: boolean;
   snapToGrid: boolean;
   gridSize: number;
@@ -486,6 +504,17 @@ export interface MapViewSettings {
   wallStyle: 'stone' | 'brick' | 'ruin';
   overlayPreset: 'all' | 'exploration' | 'links';
   lightPreset: 'torch' | 'moonlit' | 'neutral';
+  orbitTarget?: Point;
+  orbitDistance?: number;
+  followDistance?: number;
+  quality3d?: 'low' | 'medium' | 'high';
+}
+
+export interface PlayerState {
+  enabled: boolean;
+  position: Point;
+  headingDeg: number;
+  lastVisitedRoomId?: string;
 }
 
 export interface MapRecord {
@@ -511,11 +540,13 @@ export interface MapRecord {
   routeOverlays: RouteOverlay[];
   transitions: TransitionRecord[];
   anchors: AnchorRecord[];
+  props: PropRecord[];
   markers: MarkerRecord[];
   notesBoard: NoteRecord[];
   zones: RegionZone[];
   sketches: SketchStroke[];
   view: MapViewSettings;
+  player?: PlayerState;
   tileGrid?: import('./tilemap').TileGrid;
 }
 
@@ -547,6 +578,7 @@ export interface ProjectRecord {
   updatedAt: string;
   globalTags: string[];
   iconFavorites: string[];
+  assetFavorites: string[];
   recentIcons: string[];
   uploadedIcons: UploadedIconAsset[];
   settings: ProjectSettings;
@@ -630,6 +662,7 @@ export interface SelectionState {
     | 'corridor'
     | 'wall'
     | 'doorway'
+    | 'prop'
     | 'marker'
     | 'transition'
     | 'note'
@@ -660,10 +693,24 @@ export interface CanvasCursorHint {
 export interface ToolSettings {
   roomPlacement: RoomPlacementMode;
   roomType: FloorRoomType;
+  roomPaintBrush: 1 | 2 | 3 | 4 | 5;
+  roomPaintMode: 'add' | 'subtract';
+  roomStampSize: 6 | 8 | 10;
+  roomStampShape: 'rectangle' | 'l_shape' | 't_shape' | 'cross';
+  roomStampRotation: 0 | 90 | 180 | 270;
   corridorWidth: number;
   transitionType: TransitionType;
+  doorStyleId?: string;
+  propAssetId: string;
   markerPreset: MarkerPlacementPreset;
+  sketchWidth: number;
   eraseMode: 'entity' | 'segment';
+}
+
+export interface PanelLayoutState {
+  leftSidebar: number;
+  rightSidebar: number;
+  bottomPanel: number;
 }
 
 export interface UiState {
@@ -697,12 +744,29 @@ export interface UiState {
   focusAnchorId?: string;
   highlightedTransitionId?: string;
   canvasHint?: CanvasCursorHint;
-  inspectorTab: 'selection' | 'map' | 'layers' | 'links' | 'notes' | 'help';
+  canvasCursorWorld?: Point;
+  canvasCursorSnapped?: Point;
+  footprintEditRoomId?: string;
+  inspectorTab: 'selection' | 'assets' | 'map' | 'layers' | 'links' | 'notes' | 'help';
+  panelLayout: PanelLayoutState;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
+}
+
+export interface PersistedUiState {
+  editorMode: EditorMode;
+  activeTool: ToolType;
+  toolSettings: ToolSettings;
+  showLeftSidebar: boolean;
+  showRightSidebar: boolean;
+  showBottomPanel: boolean;
+  bottomPanelTab: UiState['bottomPanelTab'];
+  inspectorTab: UiState['inspectorTab'];
+  panelLayout: PanelLayoutState;
 }
 
 export interface StoredWorkspace {
   workspace: WorkspaceState;
   theme: AppTheme;
   onboarding: OnboardingState;
+  ui?: PersistedUiState;
 }

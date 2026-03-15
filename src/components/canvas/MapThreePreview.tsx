@@ -13,10 +13,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
+import { toast } from 'sonner';
 
-import type { DoorwayOrientation, MapRecord, Point, WallSegment } from '../../models/types';
+import type { DoorwayOrientation, MapRecord, Point, ViewMode, WallSegment } from '../../models/types';
 import type { TileGrid } from '../../models/tilemap';
 import { getRoomBounds, getRoomFootprint } from '../../lib/floorplan';
+import { findAsset } from '../../lib/assets/catalog';
 import { useAppStore } from '../../store/useAppStore';
 
 interface MapBounds {
@@ -30,9 +32,11 @@ interface MapBounds {
 }
 
 interface DoorSlot {
+  id: string;
   position: THREE.Vector3;
   orientation: DoorwayOrientation;
   transitionType: MapRecord['doorways'][number]['transitionType'];
+  doorStyleId?: string;
   width: number;
   wallThickness: number;
 }
@@ -64,6 +68,13 @@ interface PreviewSceneRef {
   clock: { getDelta: () => number };
   keys: Record<string, boolean>;
   fpActive: boolean;
+  viewMode: ViewMode;
+  followDistance: number;
+  rightMouseDown: boolean;
+  playerRig: THREE.Group;
+  playerPosition: THREE.Vector3;
+  headingDeg: number;
+  rayTargets: THREE.Object3D[];
   tileGrid?: TileGrid;
   animationFrame: number;
   disposeList: Array<() => void>;
@@ -71,12 +82,61 @@ interface PreviewSceneRef {
 
 export interface MapThreePreviewHandle {
   resetCamera: () => void;
+  focusSelection: () => void;
 }
 
 const HDRI_PATH = '/assets/hdri/indoor_environment_hdri_008.hdr';
 const DOOR_MODEL_PATH = '/assets/models/doors/large_castle_door.glb';
-const WALL_TEXTURES_PATH = '/assets/pbr/wall_stone';
-const FLOOR_TEXTURES_PATH = '/assets/pbr/floor_stone';
+
+const STYLE_PACK_3D: Record<MapRecord['view']['stylePackId'], {
+  floorPath: string;
+  wallPath: string;
+  floorTint: number;
+  wallTint: number;
+  groundTint: number;
+  fogTint: number;
+}> = {
+  stonekeep: {
+    floorPath: '/assets/pbr/floor_stone',
+    wallPath: '/assets/pbr/wall_stone',
+    floorTint: 0xc4b5a0,
+    wallTint: 0x7f7569,
+    groundTint: 0x14110f,
+    fogTint: 0x0f0d0b,
+  },
+  parchment: {
+    floorPath: '/assets/pbr/floor_stone',
+    wallPath: '/assets/pbr/wall_stone',
+    floorTint: 0xd7c5a5,
+    wallTint: 0x9c8b75,
+    groundTint: 0x19140f,
+    fogTint: 0x17120d,
+  },
+  pixel: {
+    floorPath: '/assets/pbr/floor_stone',
+    wallPath: '/assets/pbr/wall_stone',
+    floorTint: 0xa7937b,
+    wallTint: 0x726759,
+    groundTint: 0x11100f,
+    fogTint: 0x0f0e0d,
+  },
+  ink: {
+    floorPath: '/assets/pbr/floor_stone',
+    wallPath: '/assets/pbr/wall_stone',
+    floorTint: 0x96918b,
+    wallTint: 0x66615b,
+    groundTint: 0x0d0d0e,
+    fogTint: 0x0b0b0c,
+  },
+  battlemap: {
+    floorPath: '/assets/pbr/floor_stone',
+    wallPath: '/assets/pbr/wall_stone',
+    floorTint: 0xbda785,
+    wallTint: 0x7b6b5f,
+    groundTint: 0x15110f,
+    fogTint: 0x120f0d,
+  },
+};
 
 const WALL_HEIGHT = 84;
 const FLOOR_SLAB_HEIGHT = 4;
@@ -86,6 +146,7 @@ const FP_MOVE_SPEED = 220;
 const CORRIDOR_WALL_THICKNESS = 14;
 const FLOOR_TEXTURE_SCALE = 176;
 const WALL_TEXTURE_SCALE = 160;
+const CROUCH_OFFSET = 14;
 
 const gltfLoader = new GLTFLoader();
 const hdrLoader = new HDRLoader();
@@ -117,6 +178,11 @@ const doorwayRotationY = (orientation: DoorwayOrientation) => {
   if (orientation === 'south') return Math.PI;
   if (orientation === 'east') return -Math.PI / 2;
   return Math.PI / 2;
+};
+
+const createFogTint = (tint: number, alpha: number) => {
+  const color = new THREE.Color(tint);
+  return `rgba(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)}, ${alpha})`;
 };
 
 const warnAsset = (label: string, error: unknown) => {
@@ -211,6 +277,7 @@ const buildSurfaceMaterial = (
   textures: PbrTextureSet,
   sizeX: number,
   sizeY: number,
+  tint: number,
 ) => {
   const scale = kind === 'floor' ? FLOOR_TEXTURE_SCALE : WALL_TEXTURE_SCALE;
   const repeatX = Math.max(1, sizeX / scale);
@@ -229,7 +296,7 @@ const buildSurfaceMaterial = (
   }
 
   const materialConfig: THREE.MeshStandardMaterialParameters = {
-    color: kind === 'floor' ? 0xc4b5a0 : 0x7f7569,
+    color: tint,
     roughness: kind === 'floor' ? 0.95 : 0.88,
     metalness: 0.04,
     bumpScale: bumpMap ? 0.8 : 0,
@@ -387,28 +454,37 @@ const addFallbackDoorGeometry = (
 ) => {
   const doorLeafGeometry = new THREE.BoxGeometry(1, 1, 0.16);
   const frameGeometry = new THREE.BoxGeometry(1, 1, 0.18);
-  const doorLeafMaterial = new THREE.MeshStandardMaterial({
-    color: 0x5d3d28,
-    roughness: 0.68,
-    metalness: 0.08,
-  });
-  const frameMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2d211a,
-    roughness: 0.82,
-    metalness: 0.04,
-  });
 
   ensureUv2(doorLeafGeometry);
   ensureUv2(frameGeometry);
 
   disposeList.push(() => doorLeafGeometry.dispose());
   disposeList.push(() => frameGeometry.dispose());
-  disposeList.push(() => doorLeafMaterial.dispose());
-  disposeList.push(() => frameMaterial.dispose());
 
   for (const slot of doorSlots) {
+    const leafColor =
+      slot.doorStyleId === 'door.iron.band' ? 0x737983 :
+      slot.doorStyleId === 'door.secret.panel' ? 0x7b6957 :
+      slot.doorStyleId === 'door.boss.double' ? 0x7a2326 :
+      0x5d3d28;
+    const frameColor =
+      slot.doorStyleId === 'door.iron.band' ? 0x343a44 :
+      slot.doorStyleId === 'door.boss.double' ? 0x311315 :
+      0x2d211a;
+    const doorLeafMaterial = new THREE.MeshStandardMaterial({
+      color: leafColor,
+      roughness: 0.68,
+      metalness: slot.doorStyleId === 'door.iron.band' ? 0.3 : 0.08,
+    });
+    const frameMaterial = new THREE.MeshStandardMaterial({
+      color: frameColor,
+      roughness: 0.82,
+      metalness: slot.doorStyleId === 'door.iron.band' ? 0.22 : 0.04,
+    });
+    disposeList.push(() => doorLeafMaterial.dispose());
+    disposeList.push(() => frameMaterial.dispose());
     const group = new THREE.Group();
-    group.userData.transitionType = slot.transitionType;
+    group.userData = { transitionType: slot.transitionType, entityKind: 'doorway', entityId: slot.id, doorStyleId: slot.doorStyleId };
     const normal = doorwayNormal(slot.orientation);
     const doorHeight = WALL_HEIGHT * 0.76;
     const depth = Math.max(8, slot.wallThickness * 0.65);
@@ -439,11 +515,17 @@ const addFallbackDoorGeometry = (
       }
     } else {
       const leaf = new THREE.Mesh(doorLeafGeometry, doorLeafMaterial);
-      leaf.scale.set(slot.width * 0.82, doorHeight, depth);
+      leaf.scale.set(slot.doorStyleId === 'door.boss.double' ? slot.width * 0.36 : slot.width * 0.82, doorHeight, depth);
       leaf.position.set(0, doorHeight / 2, 0);
       leaf.castShadow = true;
       leaf.receiveShadow = true;
       group.add(leaf);
+      if (slot.doorStyleId === 'door.boss.double') {
+        const secondLeaf = leaf.clone();
+        secondLeaf.position.x = slot.width * 0.24;
+        leaf.position.x = -slot.width * 0.24;
+        group.add(secondLeaf);
+      }
     }
 
     group.add(topFrame, leftFrame, rightFrame);
@@ -468,9 +550,10 @@ const addDoorModelInstances = (
   const baseWidth = Math.max(size.x, size.z, 1);
   const baseHeight = Math.max(size.y, 1);
 
-  for (const slot of doorSlots.filter((candidate) => candidate.transitionType === 'door')) {
+  for (const slot of doorSlots.filter((candidate) => candidate.transitionType === 'door' && (!candidate.doorStyleId || candidate.doorStyleId === 'door.wood.basic'))) {
     const instance = template.clone(true);
     const root = new THREE.Group();
+    root.userData = { entityKind: 'doorway', entityId: slot.id };
     const normal = doorwayNormal(slot.orientation);
     const uniformScale = (slot.width / baseWidth) * 0.96;
     const visualScale = baseHeight * uniformScale < WALL_HEIGHT * 0.72
@@ -651,9 +734,11 @@ const buildTileGridScene = (
 
   for (const doorway of map.doorways) {
     doorSlots.push({
+      id: doorway.id,
       position: new THREE.Vector3(doorway.position.x, 0, doorway.position.y),
       orientation: doorway.orientation,
       transitionType: doorway.transitionType,
+      doorStyleId: doorway.doorStyleId,
       width: doorway.width,
       wallThickness: Math.max(12, tileSizePx * 0.6),
     });
@@ -681,6 +766,7 @@ const buildFloorplanScene = (
         FLOOR_SLAB_HEIGHT / 2,
         rect.y + rect.height / 2,
       );
+      mesh.userData = { entityKind: 'floor_room', entityId: room.id };
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       scene.add(mesh);
@@ -729,6 +815,7 @@ const buildFloorplanScene = (
     const mesh = new THREE.Mesh(geometry, wallMaterial);
     mesh.position.set((start.x + end.x) / 2, WALL_HEIGHT / 2, (start.y + end.y) / 2);
     mesh.rotation.y = -Math.atan2(dz, dx);
+    mesh.userData = { entityKind: 'wall', entityId: wall.id };
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     scene.add(mesh);
@@ -737,9 +824,11 @@ const buildFloorplanScene = (
 
   for (const doorway of map.doorways) {
     doorSlots.push({
+      id: doorway.id,
       position: new THREE.Vector3(doorway.position.x, 0, doorway.position.y),
       orientation: doorway.orientation,
       transitionType: doorway.transitionType,
+      doorStyleId: doorway.doorStyleId,
       width: doorway.width,
       wallThickness: 18,
     });
@@ -757,15 +846,271 @@ const buildFloorplanScene = (
   }
 };
 
+const createPlayerRig = () => {
+  const rig = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(PLAYER_RADIUS, 28, 4, 8),
+    new THREE.MeshStandardMaterial({ color: 0xd2b48c, roughness: 0.9, metalness: 0.02 }),
+  );
+  body.position.y = CAMERA_HEIGHT * 0.45;
+  body.castShadow = true;
+  rig.add(body);
+  return rig;
+};
+
+const createPropMesh = (assetId: string) => {
+  const asset = findAsset(assetId);
+  const material = new THREE.MeshStandardMaterial({ color: 0x8e755b, roughness: 0.9, metalness: 0.06 });
+
+  if (assetId.startsWith('chest.')) {
+    const group = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.BoxGeometry(30, 16, 20), material);
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(30, 10, 20), material);
+    base.position.y = 8;
+    lid.position.y = 18;
+    lid.position.z = -1;
+    group.add(base, lid);
+    return { object: group, dispose: () => material.dispose() };
+  }
+
+  if (assetId === 'prop.barrel') {
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(11, 12, 22, 14), material);
+    mesh.position.y = 11;
+    return { object: mesh, dispose: () => material.dispose() };
+  }
+
+  if (assetId === 'prop.torch.wall') {
+    const group = new THREE.Group();
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 18, 8), material);
+    stem.rotation.z = Math.PI / 2;
+    const flame = new THREE.PointLight(0xffb95c, 0.65, 180);
+    flame.position.set(8, 14, 0);
+    group.add(stem, flame);
+    return { object: group, dispose: () => material.dispose() };
+  }
+
+  if (assetId === 'prop.table.round') {
+    const group = new THREE.Group();
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(16, 16, 4, 24), material);
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 18, 12), material);
+    top.position.y = 20;
+    leg.position.y = 9;
+    group.add(top, leg);
+    return { object: group, dispose: () => material.dispose() };
+  }
+
+  const geometry =
+    asset?.tileRole === 'decor_pillar'
+      ? new THREE.CylinderGeometry(10, 12, 44, 16)
+      : asset?.tileRole === 'decor_table'
+        ? new THREE.BoxGeometry(34, 18, 18)
+        : new THREE.BoxGeometry(22, 22, 22);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.y = geometry.boundingBox ? geometry.boundingBox.max.y * 0.5 : 11;
+  return {
+    object: mesh,
+    dispose: () => {
+      geometry.dispose();
+      material.dispose();
+    },
+  };
+};
+
+const addPropsToScene = (
+  map: MapRecord,
+  scene: THREE.Scene,
+  rayTargets: THREE.Object3D[],
+  disposeList: Array<() => void>,
+) => {
+  for (const prop of map.props) {
+    const { object, dispose } = createPropMesh(prop.assetId);
+    object.position.set(prop.position.x, object.position.y, prop.position.y);
+    object.rotation.y = THREE.MathUtils.degToRad(prop.rotationDeg);
+    object.scale.setScalar(prop.scale);
+    object.userData = { entityKind: 'prop', entityId: prop.id };
+    object.traverse((child) => {
+      child.userData = { entityKind: 'prop', entityId: prop.id };
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        rayTargets.push(child);
+      }
+    });
+    scene.add(object);
+    disposeList.push(dispose);
+  }
+};
+
+const computeFollowCameraPosition = (position: Point, headingDeg: number, distance: number) => {
+  const yaw = THREE.MathUtils.degToRad(headingDeg);
+  const behindX = Math.sin(yaw) * distance;
+  const behindZ = Math.cos(yaw) * distance;
+  return new THREE.Vector3(position.x - behindX, 160, position.y - behindZ);
+};
+
+const isBlockedAt = (map: MapRecord, tileGrid: TileGrid | undefined, worldX: number, worldZ: number) => {
+  if (tileGrid) {
+    return (
+      isWallTileBlocked(tileGrid, worldX + PLAYER_RADIUS, worldZ) ||
+      isWallTileBlocked(tileGrid, worldX - PLAYER_RADIUS, worldZ) ||
+      isWallTileBlocked(tileGrid, worldX, worldZ + PLAYER_RADIUS) ||
+      isWallTileBlocked(tileGrid, worldX, worldZ - PLAYER_RADIUS)
+    );
+  }
+
+  return !isWalkableFallback(map, worldX, worldZ) || collidesWithWallSegments(map.wallSegments, worldX, worldZ);
+};
+
+const resolveFollowCameraPosition = (
+  map: MapRecord,
+  tileGrid: TileGrid | undefined,
+  position: Point,
+  headingDeg: number,
+  distance: number,
+) => {
+  const desired = computeFollowCameraPosition(position, headingDeg, distance);
+  if (!isBlockedAt(map, tileGrid, desired.x, desired.z)) {
+    return desired;
+  }
+
+  const anchor = new THREE.Vector3(position.x, CAMERA_HEIGHT * 0.72, position.y);
+  const candidate = new THREE.Vector3();
+  for (let step = 1; step <= 8; step += 1) {
+    candidate.lerpVectors(desired, anchor, step / 8);
+    if (!isBlockedAt(map, tileGrid, candidate.x, candidate.z)) {
+      return candidate.clone();
+    }
+  }
+
+  return anchor;
+};
+
+const createFogOverlay = (bounds: MapBounds, tint: number) => {
+  const margin = 960;
+  const worldWidth = Math.max(1600, bounds.maxX - bounds.minX + margin * 2);
+  const worldHeight = Math.max(1600, bounds.maxZ - bounds.minZ + margin * 2);
+  const planeMinX = bounds.cx - worldWidth / 2;
+  const planeMinZ = bounds.cz - worldHeight / 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = 768;
+  canvas.height = 768;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const geometry = new THREE.PlaneGeometry(worldWidth, worldHeight);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(bounds.cx, FLOOR_SLAB_HEIGHT + 1.4, bounds.cz);
+  mesh.renderOrder = 6;
+  return {
+    canvas,
+    context,
+    texture,
+    mesh,
+    planeMinX,
+    planeMinZ,
+    worldWidth,
+    worldHeight,
+    tint,
+    dispose: () => {
+      geometry.dispose();
+      material.dispose();
+      texture.dispose();
+    },
+  };
+};
+
+const updateFogOverlay = (
+  overlay: NonNullable<ReturnType<typeof createFogOverlay>>,
+  playerPosition: THREE.Vector3,
+  headingDeg: number,
+  fogMode: MapRecord['view']['fogMode3d'],
+) => {
+  const { context, canvas, texture, planeMinX, planeMinZ, worldWidth, worldHeight, tint } = overlay;
+  const px = ((playerPosition.x - planeMinX) / worldWidth) * canvas.width;
+  const py = ((playerPosition.z - planeMinZ) / worldHeight) * canvas.height;
+  const radiusX = (900 / worldWidth) * canvas.width;
+  const radiusY = (900 / worldHeight) * canvas.height;
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = createFogTint(tint, 0.88);
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  context.save();
+  context.globalCompositeOperation = 'destination-out';
+  context.fillStyle = 'rgba(0,0,0,1)';
+
+  if (fogMode === 'radius') {
+    context.beginPath();
+    context.ellipse(px, py, radiusX, radiusY, 0, 0, Math.PI * 2);
+    context.fill();
+  } else {
+    const headingRad = THREE.MathUtils.degToRad(headingDeg) - Math.PI / 2;
+    const coneHalfAngle = THREE.MathUtils.degToRad(60);
+    context.beginPath();
+    context.moveTo(px, py);
+    context.ellipse(px, py, radiusX, radiusY, 0, headingRad - coneHalfAngle, headingRad + coneHalfAngle);
+    context.closePath();
+    context.fill();
+    context.beginPath();
+    context.ellipse(px, py, radiusX * 0.22, radiusY * 0.22, 0, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  context.restore();
+  texture.needsUpdate = true;
+};
+
 export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecord }>(
   function MapThreePreview({ map }, ref) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const sceneRef = useRef<PreviewSceneRef | null>(null);
-    const [fpArmed, setFpArmed] = useState(false);
     const [fpLocked, setFpLocked] = useState(false);
 
+    const activeTool = useAppStore((state) => state.activeTool);
     const selection = useAppStore((state) => state.selection);
+    const setSelection = useAppStore((state) => state.setSelection);
+    const addMarkerAt = useAppStore((state) => state.addMarkerAt);
+    const addNoteAt = useAppStore((state) => state.addNoteAt);
+    const addDoorwayAt = useAppStore((state) => state.addDoorwayAt);
+    const addPropAt = useAppStore((state) => state.addPropAt);
+    const updatePlayer = useAppStore((state) => state.updatePlayer);
+    const updateMapView = useAppStore((state) => state.updateMapView);
+    const setViewMode = useAppStore((state) => state.setViewMode);
     const bounds = useMemo(() => computeMapBounds(map), [map]);
+    const mode = map.view.viewMode;
+    const quality3d = map.view.quality3d ?? 'medium';
+    const stylePack3d = STYLE_PACK_3D[map.view.stylePackId];
+    const selectionSummary = useMemo(() => {
+      const selectedId = selection.ids[0];
+      if (!selectedId || selection.kind === 'none') return 'Nothing selected';
+      if (selection.kind === 'note') {
+        return map.notesBoard.find((entry) => entry.id === selectedId)?.title ?? 'Note selected';
+      }
+      const labeledEntity = [
+        ...map.floorRooms,
+        ...map.corridors,
+        ...map.doorways,
+        ...map.transitions,
+        ...map.markers,
+        ...map.props,
+      ].find((entry) => entry.id === selectedId);
+      return labeledEntity?.label ?? `${selection.kind} selected`;
+    }, [map, selection]);
+    const compassHeading = (() => {
+      const heading = map.player?.headingDeg ?? 0;
+      if (heading >= 45 && heading < 135) return 'E';
+      if (heading >= 135 && heading < 225) return 'S';
+      if (heading >= 225 && heading < 315) return 'W';
+      return 'N';
+    })();
 
     const resetCamera = useCallback(() => {
       const current = sceneRef.current;
@@ -773,17 +1118,17 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
 
       current.fpControls.unlock();
       current.fpActive = false;
+      current.viewMode = 'third_orbit';
       current.orbit.enabled = true;
       current.orbit.reset();
       current.clampOrbit();
       current.orbit.update();
-      setFpArmed(false);
+      updateMapView({
+        orbitTarget: { x: current.orbit.target.x, y: current.orbit.target.z },
+        orbitDistance: current.camera.position.distanceTo(current.orbit.target),
+      });
       setFpLocked(false);
-    }, []);
-
-    useImperativeHandle(ref, () => ({
-      resetCamera,
-    }), [resetCamera]);
+    }, [updateMapView]);
 
     useEffect(() => {
       const host = containerRef.current;
@@ -796,9 +1141,9 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 1.08;
-      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.enabled = quality3d !== 'low';
       renderer.shadowMap.type = THREE.PCFShadowMap;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(quality3d === 'low' ? 1 : Math.min(window.devicePixelRatio, 2));
       host.appendChild(renderer.domElement);
       disposeList.push(() => renderer.dispose());
       disposeList.push(() => {
@@ -808,13 +1153,14 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       });
 
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color('#0f0d0b');
-      scene.fog = new THREE.FogExp2('#0f0d0b', 0.00065);
+      scene.background = new THREE.Color(stylePack3d.fogTint);
+      scene.fog = new THREE.FogExp2(stylePack3d.fogTint, 0.00065);
 
       const camera = new THREE.PerspectiveCamera(52, 1, 1, 20000);
-      const orbitDistance = bounds.span * 1.15;
-      camera.position.set(bounds.cx + orbitDistance * 0.7, bounds.span * 0.78, bounds.cz + orbitDistance * 0.72);
-      camera.lookAt(bounds.cx, 0, bounds.cz);
+      const orbitDistance = map.view.orbitDistance ?? bounds.span * 1.15;
+      const orbitTarget = map.view.orbitTarget ?? { x: bounds.cx, y: bounds.cz };
+      camera.position.set(orbitTarget.x + orbitDistance * 0.7, bounds.span * 0.78, orbitTarget.y + orbitDistance * 0.72);
+      camera.lookAt(orbitTarget.x, 0, orbitTarget.y);
 
       const orbit = new OrbitControls(camera, renderer.domElement);
       orbit.enableDamping = true;
@@ -828,7 +1174,7 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         MIDDLE: THREE.MOUSE.DOLLY,
         RIGHT: THREE.MOUSE.PAN,
       };
-      orbit.target.set(bounds.cx, 0, bounds.cz);
+      orbit.target.set(orbitTarget.x, 0, orbitTarget.y);
       orbit.enablePan = true;
 
       const clampOrbit = () => {
@@ -847,6 +1193,14 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
 
       orbit.addEventListener('change', clampOrbit);
       disposeList.push(() => orbit.removeEventListener('change', clampOrbit));
+      const syncOrbitState = () => {
+        updateMapView({
+          orbitTarget: { x: orbit.target.x, y: orbit.target.z },
+          orbitDistance: camera.position.distanceTo(orbit.target),
+        });
+      };
+      orbit.addEventListener('end', syncOrbitState);
+      disposeList.push(() => orbit.removeEventListener('end', syncOrbitState));
       clampOrbit();
       orbit.saveState();
 
@@ -861,12 +1215,12 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       disposeList.push(() => renderer.domElement.removeEventListener('contextmenu', preventContextMenu));
 
       const floorFallbackMaterial = new THREE.MeshStandardMaterial({
-        color: 0xc1b39f,
+        color: stylePack3d.floorTint,
         roughness: 0.94,
         metalness: 0.03,
       });
       const wallFallbackMaterial = new THREE.MeshStandardMaterial({
-        color: 0x7c7266,
+        color: stylePack3d.wallTint,
         roughness: 0.88,
         metalness: 0.05,
       });
@@ -875,7 +1229,7 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
 
       const groundGeometry = new THREE.PlaneGeometry(bounds.span * 4, bounds.span * 4);
       const groundMaterial = new THREE.MeshStandardMaterial({
-        color: 0x14110f,
+        color: stylePack3d.groundTint,
         roughness: 1,
         metalness: 0.02,
       });
@@ -894,7 +1248,8 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       directionalLight.position.set(bounds.cx - bounds.span * 0.42, bounds.span * 1.15, bounds.cz - bounds.span * 0.3);
       directionalLight.target.position.set(bounds.cx, 0, bounds.cz);
       directionalLight.castShadow = true;
-      directionalLight.shadow.mapSize.set(2048, 2048);
+      const shadowMapSize = quality3d === 'high' ? 4096 : 2048;
+      directionalLight.shadow.mapSize.set(shadowMapSize, shadowMapSize);
       const shadowExtent = bounds.span * 0.9;
       directionalLight.shadow.camera.left = -shadowExtent;
       directionalLight.shadow.camera.right = shadowExtent;
@@ -909,11 +1264,36 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
 
       const materialTargets: MaterialTarget[] = [];
       const doorSlots: DoorSlot[] = [];
+      const rayTargets: THREE.Object3D[] = [];
       if (map.tileGrid) {
         buildTileGridScene(map, scene, floorFallbackMaterial, wallFallbackMaterial, materialTargets, doorSlots, disposeList);
       } else {
         buildFloorplanScene(map, scene, floorFallbackMaterial, wallFallbackMaterial, materialTargets, doorSlots, disposeList);
       }
+
+      scene.traverse((object) => {
+        if (object instanceof THREE.Mesh && object.userData?.entityKind) {
+          rayTargets.push(object);
+        }
+      });
+
+      addPropsToScene(map, scene, rayTargets, disposeList);
+      const fogOverlay = createFogOverlay(bounds, stylePack3d.fogTint);
+      if (fogOverlay) {
+        scene.add(fogOverlay.mesh);
+        disposeList.push(fogOverlay.dispose);
+      }
+
+      const playerRig = createPlayerRig();
+      const playerState = map.player ?? {
+        enabled: true,
+        position: { x: bounds.cx, y: bounds.cz },
+        headingDeg: 0,
+      };
+      playerRig.position.set(playerState.position.x, 0, playerState.position.y);
+      playerRig.rotation.y = THREE.MathUtils.degToRad(playerState.headingDeg);
+      playerRig.visible = mode !== 'first_walk';
+      scene.add(playerRig);
 
       const fallbackDoorGroup = new THREE.Group();
       scene.add(fallbackDoorGroup);
@@ -929,8 +1309,8 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
 
       const applyAssetMaterials = async () => {
         const [floorTextures, wallTextures, doorTemplate] = await Promise.all([
-          loadPbrTextureSet(FLOOR_TEXTURES_PATH, 'floor textures'),
-          loadPbrTextureSet(WALL_TEXTURES_PATH, 'wall textures'),
+          loadPbrTextureSet(stylePack3d.floorPath, `${map.view.stylePackId} floor textures`),
+          loadPbrTextureSet(stylePack3d.wallPath, `${map.view.stylePackId} wall textures`),
           loadDoorModel(),
         ]);
 
@@ -946,6 +1326,7 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
               textureSet,
               target.sizeX,
               target.sizeY,
+              target.kind === 'floor' ? stylePack3d.floorTint : stylePack3d.wallTint,
             );
 
             target.mesh.material = material;
@@ -959,7 +1340,11 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         if (doorTemplate) {
           modelDoorGroup.visible = true;
           fallbackDoorGroup.traverse((object) => {
-            if (object instanceof THREE.Group && object.userData.transitionType === 'door') {
+            if (
+              object instanceof THREE.Group &&
+              object.userData.transitionType === 'door' &&
+              (!object.userData.doorStyleId || object.userData.doorStyleId === 'door.wood.basic')
+            ) {
               object.visible = false;
             }
           });
@@ -1016,12 +1401,136 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       disposeList.push(() => document.removeEventListener('keydown', onKeyDown));
       disposeList.push(() => document.removeEventListener('keyup', onKeyUp));
 
+      const raycaster = new THREE.Raycaster();
+      const pointer = new THREE.Vector2();
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      let lastVisitedRoomId = playerState.lastVisitedRoomId;
+
+      const setRayFromEvent = (event: MouseEvent, useCenter = false) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const clientX = useCenter ? rect.left + rect.width / 2 : event.clientX;
+        const clientY = useCenter ? rect.top + rect.height / 2 : event.clientY;
+        pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(pointer, camera);
+      };
+
+      const getGroundIntersection = (event: MouseEvent, useCenter = false) => {
+        setRayFromEvent(event, useCenter);
+        return raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
+      };
+
+      const getEntityIntersection = (event: MouseEvent, useCenter = false) => {
+        setRayFromEvent(event, useCenter);
+        return raycaster.intersectObjects(rayTargets, true)[0];
+      };
+
+      const maybeAutoVisit = (current: PreviewSceneRef) => {
+        const room = map.floorRooms.find((entry) =>
+          getRoomFootprint(entry).some((rect) =>
+            current.playerPosition.x >= rect.x &&
+            current.playerPosition.x <= rect.x + rect.width &&
+            current.playerPosition.z >= rect.y &&
+            current.playerPosition.z <= rect.y + rect.height,
+          ),
+        );
+        if (room?.id && room.id !== lastVisitedRoomId) {
+          lastVisitedRoomId = room.id;
+          updatePlayer({
+            position: { x: current.playerPosition.x, y: current.playerPosition.z },
+            headingDeg: current.headingDeg,
+            lastVisitedRoomId: room.id,
+          }, { autoVisit: true });
+        }
+      };
+
+      const onMouseDown = (event: MouseEvent) => {
+        if (!sceneRef.current) return;
+        if (event.button === 2) {
+          sceneRef.current.rightMouseDown = true;
+        }
+      };
+      const onMouseUp = (event: MouseEvent) => {
+        const current = sceneRef.current;
+        if (!current) return;
+        if (event.button === 2) {
+          current.rightMouseDown = false;
+        }
+      };
+      const onMouseMove = (event: MouseEvent) => {
+        const current = sceneRef.current;
+        if (!current) return;
+        if (current.viewMode === 'second_follow' && current.rightMouseDown) {
+          current.headingDeg = (current.headingDeg + event.movementX * 0.28 + 360) % 360;
+          current.playerRig.rotation.y = THREE.MathUtils.degToRad(current.headingDeg);
+        }
+      };
+      const onWheel = (event: WheelEvent) => {
+        const current = sceneRef.current;
+        if (!current || current.viewMode !== 'second_follow') return;
+        current.followDistance = THREE.MathUtils.clamp(current.followDistance + event.deltaY * 0.08, 180, 420);
+        updateMapView({ followDistance: current.followDistance });
+      };
+      const onClick = (event: MouseEvent) => {
+        const current = sceneRef.current;
+        if (!current) return;
+        const useCenter = current.viewMode === 'first_walk';
+        if (current.viewMode === 'first_walk' && !current.fpControls.isLocked) {
+          current.fpControls.lock();
+          return;
+        }
+
+        const entityHit = getEntityIntersection(event, useCenter);
+        const hit = getGroundIntersection(event, useCenter);
+
+        if (activeTool === 'doorway') {
+          if (entityHit?.object.userData?.entityKind === 'wall' && entityHit.point) {
+            addDoorwayAt({ x: entityHit.point.x, y: entityHit.point.z });
+          } else {
+            toast('Doorways in 3D must be placed on a wall face.');
+          }
+          return;
+        }
+
+        if (!hit) return;
+
+        if (activeTool === 'marker') {
+          addMarkerAt({ x: hit.x, y: hit.z });
+          return;
+        }
+        if (activeTool === 'note') {
+          addNoteAt({ x: hit.x, y: hit.z });
+          return;
+        }
+        if (activeTool === 'prop') {
+          addPropAt({ x: hit.x, y: hit.z });
+          return;
+        }
+
+        if (entityHit?.object.userData?.entityKind) {
+          setSelection({
+            kind: entityHit.object.userData.entityKind,
+            ids: [entityHit.object.userData.entityId],
+          });
+        }
+      };
+
+      renderer.domElement.addEventListener('mousedown', onMouseDown);
+      renderer.domElement.addEventListener('mouseup', onMouseUp);
+      renderer.domElement.addEventListener('mousemove', onMouseMove);
+      renderer.domElement.addEventListener('wheel', onWheel);
+      renderer.domElement.addEventListener('click', onClick);
+      disposeList.push(() => renderer.domElement.removeEventListener('mousedown', onMouseDown));
+      disposeList.push(() => renderer.domElement.removeEventListener('mouseup', onMouseUp));
+      disposeList.push(() => renderer.domElement.removeEventListener('mousemove', onMouseMove));
+      disposeList.push(() => renderer.domElement.removeEventListener('wheel', onWheel));
+      disposeList.push(() => renderer.domElement.removeEventListener('click', onClick));
+
       const onLock = () => {
         if (disposed) return;
         orbit.enabled = false;
         camera.position.y = CAMERA_HEIGHT;
         setFpLocked(true);
-        setFpArmed(true);
         if (sceneRef.current) {
           sceneRef.current.fpActive = true;
         }
@@ -1029,11 +1538,14 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
 
       const onUnlock = () => {
         if (disposed) return;
-        orbit.enabled = true;
         setFpLocked(false);
-        setFpArmed(false);
         if (sceneRef.current) {
           sceneRef.current.fpActive = false;
+          if (sceneRef.current.viewMode === 'first_walk') {
+            setViewMode('second_follow');
+          } else {
+            orbit.enabled = true;
+          }
         }
         clampOrbit();
         orbit.update();
@@ -1045,6 +1557,24 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       disposeList.push(() => fpControls.removeEventListener('unlock', onUnlock));
       disposeList.push(() => fpControls.dispose());
 
+      if (mode === 'second_follow') {
+        orbit.enabled = false;
+        const followPosition = resolveFollowCameraPosition(
+          map,
+          map.tileGrid,
+          playerState.position,
+          playerState.headingDeg,
+          map.view.followDistance ?? 260,
+        );
+        camera.position.copy(followPosition);
+        camera.lookAt(playerState.position.x, CAMERA_HEIGHT * 0.55, playerState.position.y);
+      }
+
+      if (mode === 'first_walk') {
+        orbit.enabled = false;
+        camera.position.set(playerState.position.x, CAMERA_HEIGHT, playerState.position.y);
+      }
+
       const clock = createFrameTimer();
       const animate = () => {
         const current = sceneRef.current;
@@ -1053,9 +1583,11 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         current.animationFrame = requestAnimationFrame(animate);
         const delta = current.clock.getDelta();
 
-        if (current.fpActive && current.fpControls.isLocked) {
+        if (current.viewMode === 'first_walk' && current.fpActive && current.fpControls.isLocked) {
           const previous = current.camera.position.clone();
-          const step = FP_MOVE_SPEED * delta;
+          const step = FP_MOVE_SPEED * (current.keys.ShiftLeft || current.keys.ShiftRight ? 1.6 : 1) * delta;
+          const currentHeight =
+            CAMERA_HEIGHT - ((current.keys.ControlLeft || current.keys.ControlRight) ? CROUCH_OFFSET : 0);
           const movement = new THREE.Vector3();
 
           if (current.keys.KeyW) movement.z -= 1;
@@ -1071,7 +1603,7 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
 
           current.camera.position.x = THREE.MathUtils.clamp(current.camera.position.x, current.bounds.minX, current.bounds.maxX);
           current.camera.position.z = THREE.MathUtils.clamp(current.camera.position.z, current.bounds.minZ, current.bounds.maxZ);
-          current.camera.position.y = CAMERA_HEIGHT;
+          current.camera.position.y = currentHeight;
 
           if (current.tileGrid) {
             const blocked =
@@ -1088,8 +1620,65 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
           ) {
             current.camera.position.copy(previous);
           }
+
+          current.playerPosition.set(current.camera.position.x, 0, current.camera.position.z);
+          current.headingDeg = (THREE.MathUtils.radToDeg(current.camera.rotation.y) + 180 + 360) % 360;
+          current.playerRig.visible = false;
+          maybeAutoVisit(current);
+        } else if (current.viewMode === 'second_follow') {
+          const previous = current.playerPosition.clone();
+          const yaw = THREE.MathUtils.degToRad(current.headingDeg);
+          const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+          const right = new THREE.Vector3(forward.z, 0, -forward.x);
+          const move = new THREE.Vector3();
+          const step = FP_MOVE_SPEED * (current.keys.ShiftLeft || current.keys.ShiftRight ? 1.6 : 1) * delta;
+
+          if (current.keys.KeyW) move.add(forward);
+          if (current.keys.KeyS) move.sub(forward);
+          if (current.keys.KeyD) move.add(right);
+          if (current.keys.KeyA) move.sub(right);
+
+          if (move.lengthSq() > 0) {
+            move.normalize().multiplyScalar(step);
+            current.playerPosition.add(move);
+          }
+
+          current.playerPosition.x = THREE.MathUtils.clamp(current.playerPosition.x, current.bounds.minX, current.bounds.maxX);
+          current.playerPosition.z = THREE.MathUtils.clamp(current.playerPosition.z, current.bounds.minZ, current.bounds.maxZ);
+
+          const blocked = isBlockedAt(map, current.tileGrid, current.playerPosition.x, current.playerPosition.z);
+
+          if (blocked) {
+            current.playerPosition.copy(previous);
+          }
+
+          current.playerRig.visible = true;
+          current.playerRig.position.set(current.playerPosition.x, 0, current.playerPosition.z);
+          current.playerRig.rotation.y = THREE.MathUtils.degToRad(current.headingDeg);
+
+          camera.position.copy(resolveFollowCameraPosition(
+            map,
+            current.tileGrid,
+            { x: current.playerPosition.x, y: current.playerPosition.z },
+            current.headingDeg,
+            current.followDistance,
+          ));
+          camera.lookAt(current.playerPosition.x, CAMERA_HEIGHT * 0.55, current.playerPosition.z);
+          maybeAutoVisit(current);
         } else {
+          current.playerRig.visible = true;
+          current.playerRig.position.set(current.playerPosition.x, 0, current.playerPosition.z);
+          current.playerRig.rotation.y = THREE.MathUtils.degToRad(current.headingDeg);
           current.orbit.update();
+        }
+
+        if (fogOverlay) {
+          fogOverlay.mesh.visible =
+            map.view.showFogOfKnowledge &&
+            (current.viewMode === 'second_follow' || current.viewMode === 'first_walk');
+          if (fogOverlay.mesh.visible) {
+            updateFogOverlay(fogOverlay, current.playerPosition, current.headingDeg, map.view.fogMode3d);
+          }
         }
 
         current.renderer.render(current.scene, current.camera);
@@ -1106,6 +1695,13 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         clock,
         keys,
         fpActive: false,
+        viewMode: mode,
+        followDistance: map.view.followDistance ?? 260,
+        rightMouseDown: false,
+        playerRig,
+        playerPosition: new THREE.Vector3(playerState.position.x, 0, playerState.position.y),
+        headingDeg: playerState.headingDeg,
+        rayTargets,
         tileGrid: map.tileGrid,
         animationFrame: requestAnimationFrame(animate),
         disposeList,
@@ -1115,6 +1711,11 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         disposed = true;
         const current = sceneRef.current;
         if (current) {
+          updatePlayer({
+            position: { x: current.playerPosition.x, y: current.playerPosition.z },
+            headingDeg: current.headingDeg,
+            lastVisitedRoomId: lastVisitedRoomId,
+          });
           cancelAnimationFrame(current.animationFrame);
         }
         sceneRef.current = null;
@@ -1122,9 +1723,9 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
           dispose();
         }
       };
-    }, [bounds, map]);
+    }, [activeTool, addDoorwayAt, addMarkerAt, addNoteAt, addPropAt, bounds, map, mode, quality3d, setSelection, setViewMode, stylePack3d, updateMapView, updatePlayer]);
 
-    const handleFocusSelection = useCallback(() => {
+    const focusSelection = useCallback(() => {
       const current = sceneRef.current;
       if (!current) return;
       const ids = 'ids' in selection ? selection.ids : [];
@@ -1160,6 +1761,12 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         const doorway = map.doorways.find((entry) => entry.id === id);
         if (doorway) {
           expand(doorway.position.x - doorway.width * 0.5, doorway.position.y - doorway.width * 0.5, doorway.width, doorway.width);
+          continue;
+        }
+
+        const prop = map.props.find((entry) => entry.id === id);
+        if (prop) {
+          expand(prop.position.x - 28, prop.position.y - 28, 56, 56);
         }
       }
 
@@ -1176,30 +1783,32 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       current.orbit.target.set(cx, 0, cz);
       current.clampOrbit();
       current.orbit.update();
+      updateMapView({
+        orbitTarget: { x: current.orbit.target.x, y: current.orbit.target.z },
+        orbitDistance: current.camera.position.distanceTo(current.orbit.target),
+      });
       setFpLocked(false);
-      setFpArmed(false);
-    }, [map, selection]);
+    }, [map, selection, updateMapView]);
+
+    useImperativeHandle(ref, () => ({
+      resetCamera,
+      focusSelection,
+    }), [focusSelection, resetCamera]);
 
     const toggleFirstPerson = useCallback(() => {
       const current = sceneRef.current;
       if (!current) return;
 
-      if (current.fpControls.isLocked || fpArmed) {
+      if (mode === 'first_walk') {
         current.fpControls.unlock();
         current.fpActive = false;
-        current.orbit.enabled = true;
-        setFpArmed(false);
         setFpLocked(false);
-        current.clampOrbit();
+        setViewMode('second_follow');
         return;
       }
 
-      current.camera.position.x = THREE.MathUtils.clamp(current.camera.position.x, current.bounds.minX, current.bounds.maxX);
-      current.camera.position.z = THREE.MathUtils.clamp(current.camera.position.z, current.bounds.minZ, current.bounds.maxZ);
-      current.camera.position.y = CAMERA_HEIGHT;
-      setFpArmed(true);
-      current.fpControls.lock();
-    }, [fpArmed]);
+      setViewMode('first_walk');
+    }, [mode, setViewMode]);
 
     return (
       <div
@@ -1208,38 +1817,65 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         onContextMenu={(event) => event.preventDefault()}
         onClick={() => {
           const current = sceneRef.current;
-          if (current && fpArmed && !fpLocked) {
+          if (current && mode === 'first_walk' && !fpLocked) {
             current.fpControls.lock();
           }
         }}
       >
         <div className="canvas-3d-overlay" onClick={(event) => event.stopPropagation()}>
           <div className="canvas-3d-overlay__header">
-            <strong>Cinematic Preview</strong>
-            <span>{fpLocked ? 'First-person active' : fpArmed ? 'First-person armed' : 'Orbit camera active'}</span>
+            <strong>
+              {mode === 'second_follow'
+                ? 'Second (Follow)'
+                : mode === 'first_walk'
+                  ? 'First (Walk)'
+                  : 'Third (Orbit)'}
+            </strong>
+            <span>
+              {mode === 'second_follow'
+                ? 'Follow camera active'
+                : mode === 'first_walk'
+                  ? (fpLocked ? 'Walk mode active' : 'Walk mode armed')
+                  : 'Orbit camera active'}
+            </span>
+          </div>
+          <div className="canvas-3d-overlay__hud">
+            <span>Compass {compassHeading}</span>
+            <span>Selection {selectionSummary}</span>
+            <span>Fog {map.view.showFogOfKnowledge ? map.view.fogMode3d : 'off'}</span>
+            <span>Quality {map.view.quality3d ?? 'medium'}</span>
           </div>
           <div className="canvas-3d-overlay__actions">
             <button type="button" onClick={resetCamera}>Reset Camera</button>
             <button
               type="button"
               onClick={toggleFirstPerson}
-              className={fpLocked || fpArmed ? 'is-active' : ''}
+              className={mode === 'first_walk' ? 'is-active' : ''}
             >
-              {fpLocked || fpArmed ? 'Exit First Person' : 'First Person'}
+              {mode === 'first_walk' ? 'Exit First Person' : 'First Person'}
             </button>
             {selection.kind !== 'none' && selection.ids.length > 0 ? (
-              <button data-testid="focus-selection-3d" type="button" onClick={handleFocusSelection}>
+              <button data-testid="focus-selection-3d" type="button" onClick={focusSelection}>
                 Focus Selection
               </button>
             ) : null}
           </div>
-          {fpArmed && !fpLocked ? (
+          {mode === 'first_walk' && !fpLocked ? (
             <div className="canvas-3d-overlay__hint">Click in the view to capture mouse. Esc to release.</div>
           ) : null}
-          {fpLocked ? (
-            <div className="canvas-3d-overlay__hint">WASD moves, mouse looks, Esc releases the camera.</div>
+          {mode === 'second_follow' ? (
+            <div className="canvas-3d-overlay__hint">WASD moves, right-drag rotates heading, wheel changes follow distance, Esc returns to plan.</div>
+          ) : null}
+          {mode === 'first_walk' && fpLocked ? (
+            <div className="canvas-3d-overlay__hint">WASD moves, mouse looks, Ctrl crouches, Esc releases to follow view.</div>
           ) : null}
         </div>
+        {mode !== 'third_orbit' ? (
+          <div aria-hidden="true" className="canvas-3d-crosshair">
+            <span />
+            <span />
+          </div>
+        ) : null}
         <div className="canvas-3d-host" ref={containerRef} />
       </div>
     );

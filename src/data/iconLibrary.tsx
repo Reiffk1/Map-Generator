@@ -172,6 +172,15 @@ export const builtInIconLibrary: CartographyIconDefinition[] = [
     { kind: 'path', d: 'M5.5 11.5c.8-2.4 3.2-4 6.5-4s5.7 1.6 6.5 4', stroke: 'ink', strokeWidth: 1.4 },
     { kind: 'rect', x: 10.7, y: 11.5, width: 2.6, height: 3.4, rx: 0.8, fill: 'accent', stroke: 'ink', strokeWidth: 1.1 },
   ]),
+  createIcon('barrel', 'Barrel', 'Resources', ['barrel', 'cask'], [
+    { kind: 'path', d: 'M8 6.5c1.7-1 6.3-1 8 0m-8 11c1.7 1 6.3 1 8 0', stroke: 'ink', strokeWidth: 1.35 },
+    { kind: 'rect', x: 7.2, y: 6.5, width: 9.6, height: 11, rx: 4.8, fill: 'fill', stroke: 'ink', strokeWidth: 1.35 },
+    { kind: 'path', d: 'M8.2 9.2h7.6M8.2 14.8h7.6', stroke: 'accent', strokeWidth: 1.2 },
+  ]),
+  createIcon('crate', 'Crate', 'Resources', ['crate', 'box'], [
+    { kind: 'rect', x: 5.5, y: 5.5, width: 13, height: 13, rx: 1.4, fill: 'fill', stroke: 'ink', strokeWidth: 1.35 },
+    { kind: 'path', d: 'M8 8l8 8M16 8l-8 8M6.5 12h11M12 6.5v11', stroke: 'accent', strokeWidth: 1.2 },
+  ]),
   createIcon('key-item', 'Key Item', 'Resources', ['key', 'important'], [
     { kind: 'circle', cx: 9, cy: 10, r: 3.4, fill: 'none', stroke: 'ink', strokeWidth: 1.6 },
     { kind: 'path', d: 'M12.2 10h6.2M15.2 10v2.2M17.4 10v3.4', stroke: 'accent', strokeWidth: 1.7 },

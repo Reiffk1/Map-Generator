@@ -10,11 +10,16 @@ import {
 import type { KonvaEventObject } from 'konva/lib/Node';
 import Konva from 'konva';
 import { Arc, Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from 'react-konva';
+import { toast } from 'sonner';
 import useImage from 'use-image';
 
 import { builtInIconLibrary, type IconPalette, type IconPrimitive } from '../../data/iconLibrary';
+import { getBestTileForRoleOrFallback, getTileDefById, loadAssetPack } from '../../lib/assets/assetPacks';
+import { findAsset, getTileRoleForAsset } from '../../lib/assets/catalog';
 import { TileCanvasLayer } from './TileCanvasLayer';
 import {
+  compressCellsToFootprint,
+  getLargestContiguousCellComponent,
   getGeneratedRoomWallRoomId,
   getMapContentBounds,
   getRoomBounds,
@@ -29,6 +34,7 @@ import type {
   ProjectRecord,
   TransitionRecord,
 } from '../../models/types';
+import type { LoadedAssetPack } from '../../models/tilemap';
 import { useAppStore } from '../../store/useAppStore';
 
 const virtualSize = { width: 2400, height: 1800 };
@@ -37,6 +43,17 @@ const iconPalette: IconPalette = {
   fill: '#f0e4d3',
   accent: '#cf313f',
   muted: '#8f6a67',
+};
+
+const isTypingTarget = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  return (
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement ||
+    element.isContentEditable ||
+    element.closest('[data-hotkey-scope="editor-form"]') !== null
+  );
 };
 
 const surfacePalette: Record<
@@ -212,6 +229,8 @@ export interface MapCanvasHandle {
   fitSelection: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  commitFootprintEdit: () => boolean;
+  cancelFootprintEdit: () => boolean;
 }
 
 const getTone = (tone: IconPrimitive['fill'] | IconPrimitive['stroke']) => {
@@ -338,6 +357,108 @@ const snapPoint = (point: Point, map: MapRecord) => {
   };
 };
 
+const gridCellKey = (gx: number, gy: number) => `${gx}:${gy}`;
+
+const worldToGridCell = (point: Point, gridSize: number) => ({
+  gx: Math.floor(point.x / gridSize),
+  gy: Math.floor(point.y / gridSize),
+});
+
+const footprintToCellSet = (footprint: ReturnType<typeof getRoomFootprint>, gridSize: number) => {
+  const cells = new Set<string>();
+  for (const rect of footprint) {
+    const startX = Math.floor(rect.x / gridSize);
+    const startY = Math.floor(rect.y / gridSize);
+    const width = Math.max(1, Math.ceil(rect.width / gridSize));
+    const height = Math.max(1, Math.ceil(rect.height / gridSize));
+    for (let gy = startY; gy < startY + height; gy += 1) {
+      for (let gx = startX; gx < startX + width; gx += 1) {
+        cells.add(gridCellKey(gx, gy));
+      }
+    }
+  }
+  return cells;
+};
+
+const buildStampCells = (
+  width: number,
+  height: number,
+  shape: 'rectangle' | 'l_shape' | 't_shape' | 'cross',
+) => {
+  const cells: Array<{ x: number; y: number }> = [];
+  const arm = Math.max(2, Math.round(Math.min(width, height) / 3));
+  const stemWidth = Math.max(2, Math.round(width / 3));
+  const stemOffset = Math.floor((width - stemWidth) / 2);
+  const crossWidth = Math.max(2, Math.round(width / 3));
+  const crossHeight = Math.max(2, Math.round(height / 3));
+  const crossOffsetX = Math.floor((width - crossWidth) / 2);
+  const crossOffsetY = Math.floor((height - crossHeight) / 2);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const include =
+        shape === 'rectangle'
+          ? true
+          : shape === 'l_shape'
+            ? x < arm || y >= height - arm
+            : shape === 't_shape'
+              ? y < arm || (x >= stemOffset && x < stemOffset + stemWidth)
+              : (
+                  (x >= crossOffsetX && x < crossOffsetX + crossWidth) ||
+                  (y >= crossOffsetY && y < crossOffsetY + crossHeight)
+                );
+      if (include) cells.push({ x, y });
+    }
+  }
+
+  return cells;
+};
+
+const rotateStampCells = (
+  cells: Array<{ x: number; y: number }>,
+  width: number,
+  height: number,
+  rotation: 0 | 90 | 180 | 270,
+) => {
+  const rotated = cells.map((cell) => {
+    if (rotation === 90) return { x: height - 1 - cell.y, y: cell.x };
+    if (rotation === 180) return { x: width - 1 - cell.x, y: height - 1 - cell.y };
+    if (rotation === 270) return { x: cell.y, y: width - 1 - cell.x };
+    return cell;
+  });
+
+  return {
+    cells: rotated,
+    width: rotation === 90 || rotation === 270 ? height : width,
+    height: rotation === 90 || rotation === 270 ? width : height,
+  };
+};
+
+const buildStampFootprint = (
+  position: Point,
+  gridSize: number,
+  size: 6 | 8 | 10,
+  shape: 'rectangle' | 'l_shape' | 't_shape' | 'cross',
+  rotation: 0 | 90 | 180 | 270,
+) => {
+  const baseWidth = size;
+  const baseHeight = Math.max(4, size - 2);
+  const { cells, width, height } = rotateStampCells(
+    buildStampCells(baseWidth, baseHeight, shape),
+    baseWidth,
+    baseHeight,
+    rotation,
+  );
+  const center = worldToGridCell(position, gridSize);
+  const originX = center.gx - Math.floor(width / 2);
+  const originY = center.gy - Math.floor(height / 2);
+  const footprintCells = new Set<string>();
+  for (const cell of cells) {
+    footprintCells.add(gridCellKey(originX + cell.x, originY + cell.y));
+  }
+  return compressCellsToFootprint(footprintCells, gridSize);
+};
+
 const layerVisibleForPreset = (map: MapRecord, type: string) => {
   const visible = map.layers.find((layer) => layer.type === type)?.visible ?? true;
   if (!visible) return false;
@@ -345,7 +466,7 @@ const layerVisibleForPreset = (map: MapRecord, type: string) => {
   return true;
 };
 
-const MiniNavigator = ({ map }: { map: MapRecord }) => {
+export const MiniNavigator = ({ map }: { map: MapRecord }) => {
   const bounds = getMapContentBounds(map);
   const padding = 120;
   const viewBox = `${bounds.x - padding} ${bounds.y - padding} ${bounds.width + padding * 2} ${bounds.height + padding * 2}`;
@@ -415,27 +536,64 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     const [draftRect, setDraftRect] = useState<{ start: Point; current: Point } | null>(null);
     const [draftPath, setDraftPath] = useState<Point[]>([]);
     const [draftKind, setDraftKind] = useState<'corridor' | 'wall' | 'route' | 'sketch' | null>(null);
+    const [measureDraft, setMeasureDraft] = useState<{ start: Point; current: Point } | null>(null);
+    const [spacePressed, setSpacePressed] = useState(false);
+    const [hoverCell, setHoverCell] = useState<{ gx: number; gy: number } | null>(null);
+    const [paintDrag, setPaintDrag] = useState<{
+      roomId?: string;
+      subtract: boolean;
+      rectangle: boolean;
+      startCell: { gx: number; gy: number };
+      base: Set<string>;
+    } | null>(null);
+    const [paintDraft, setPaintDraft] = useState<{
+      roomId?: string;
+      original: Set<string>;
+      current: Set<string>;
+    } | null>(null);
+    const [tilePack, setTilePack] = useState<LoadedAssetPack | null>(null);
 
     const editorMode = useAppStore((state) => state.editorMode);
     const activeTool = useAppStore((state) => state.activeTool);
     const toolSettings = useAppStore((state) => state.toolSettings);
     const selection = useAppStore((state) => state.selection);
+    const footprintEditRoomId = useAppStore((state) => state.footprintEditRoomId);
     const focusAnchorId = useAppStore((state) => state.focusAnchorId);
     const highlightedTransitionId = useAppStore((state) => state.highlightedTransitionId);
     const addFloorRoom = useAppStore((state) => state.addFloorRoom);
+    const addFloorRoomFootprint = useAppStore((state) => state.addFloorRoomFootprint);
     const addCorridor = useAppStore((state) => state.addCorridor);
     const addWall = useAppStore((state) => state.addWall);
     const addDoorwayAt = useAppStore((state) => state.addDoorwayAt);
+    const addPropAt = useAppStore((state) => state.addPropAt);
     const addMarkerAt = useAppStore((state) => state.addMarkerAt);
     const addNoteAt = useAppStore((state) => state.addNoteAt);
     const addAnchorAt = useAppStore((state) => state.addAnchorAt);
     const addRouteOverlay = useAppStore((state) => state.addRouteOverlay);
     const addSketchStroke = useAppStore((state) => state.addSketchStroke);
     const setSelection = useAppStore((state) => state.setSelection);
+    const setCanvasCursor = useAppStore((state) => state.setCanvasCursor);
+    const setFootprintEditRoomId = useAppStore((state) => state.setFootprintEditRoomId);
+    const setToolSettings = useAppStore((state) => state.setToolSettings);
     const updateMapView = useAppStore((state) => state.updateMapView);
     const moveEntity = useAppStore((state) => state.moveEntity);
     const deleteEntity = useAppStore((state) => state.deleteEntity);
     const openMap = useAppStore((state) => state.openMap);
+    const updateEntity = useAppStore((state) => state.updateEntity);
+
+    useEffect(() => {
+      let cancelled = false;
+      loadAssetPack(map.view.assetPackId)
+        .then((pack) => {
+          if (!cancelled) setTilePack(pack);
+        })
+        .catch(() => {
+          if (!cancelled) setTilePack(null);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [map.view.assetPackId]);
 
     const roomPattern = useMemo(() => {
       if (map.view.floorSurfaceStyle === 'parchment_blueprint') {
@@ -470,6 +628,93 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       if (map.view.floorSurfaceStyle === 'pixel_dungeon') return pixelCorridorImage;
       return stonekeepCorridorImage;
     }, [map.view.floorSurfaceStyle, parchmentCorridorImage, pixelCorridorImage, stonekeepCorridorImage]);
+    const resolvedPaintDraft = useMemo(() => {
+      if (paintDraft) return paintDraft;
+      if (!footprintEditRoomId) return null;
+      const room = map.floorRooms.find((entry) => entry.id === footprintEditRoomId);
+      if (!room) return null;
+      const cells = footprintToCellSet(getRoomFootprint(room), map.view.gridSize);
+      return {
+        roomId: room.id,
+        original: new Set(cells),
+        current: new Set(cells),
+      };
+    }, [footprintEditRoomId, map.floorRooms, map.view.gridSize, paintDraft]);
+
+    const getPointerWorld = useCallback(() => {
+      const stage = stageRef.current;
+      if (!stage) return undefined;
+      const pointer = stage.getPointerPosition();
+      if (!pointer) return undefined;
+      const transform = stage.getAbsoluteTransform().copy().invert();
+      return transform.point(pointer);
+    }, []);
+
+    const applyBrushCells = useCallback((
+      seed: Set<string>,
+      center: { gx: number; gy: number },
+      size: number,
+      subtract: boolean,
+    ) => {
+      const next = new Set(seed);
+      const radius = Math.max(0, size - 1);
+      for (let gy = center.gy - radius; gy <= center.gy + radius; gy += 1) {
+        for (let gx = center.gx - radius; gx <= center.gx + radius; gx += 1) {
+          const key = gridCellKey(gx, gy);
+          if (subtract) next.delete(key);
+          else next.add(key);
+        }
+      }
+      return next;
+    }, []);
+
+    const applyRectangleCells = useCallback((
+      seed: Set<string>,
+      startCell: { gx: number; gy: number },
+      endCell: { gx: number; gy: number },
+      subtract: boolean,
+    ) => {
+      const next = new Set(seed);
+      const minX = Math.min(startCell.gx, endCell.gx);
+      const minY = Math.min(startCell.gy, endCell.gy);
+      const maxX = Math.max(startCell.gx, endCell.gx);
+      const maxY = Math.max(startCell.gy, endCell.gy);
+      for (let gy = minY; gy <= maxY; gy += 1) {
+        for (let gx = minX; gx <= maxX; gx += 1) {
+          const key = gridCellKey(gx, gy);
+          if (subtract) next.delete(key);
+          else next.add(key);
+        }
+      }
+      return next;
+    }, []);
+
+    const commitFootprintEdit = useCallback(() => {
+      if (!resolvedPaintDraft || !resolvedPaintDraft.roomId) return false;
+      const largest = getLargestContiguousCellComponent(resolvedPaintDraft.current);
+      if (largest.size === 0) {
+        setPaintDraft(null);
+        setFootprintEditRoomId(undefined);
+        return false;
+      }
+      if (largest.size !== resolvedPaintDraft.current.size) {
+        toast('Room footprint must be contiguous; discarded detached islands.');
+      }
+      const footprint = compressCellsToFootprint(largest, map.view.gridSize);
+      updateEntity('floor_room', resolvedPaintDraft.roomId, { footprint });
+      setPaintDraft(null);
+      setPaintDrag(null);
+      setFootprintEditRoomId(undefined);
+      return true;
+    }, [map.view.gridSize, resolvedPaintDraft, setFootprintEditRoomId, updateEntity]);
+
+    const cancelFootprintEdit = useCallback(() => {
+      if (!resolvedPaintDraft?.roomId && !footprintEditRoomId) return false;
+      setPaintDraft(null);
+      setPaintDrag(null);
+      setFootprintEditRoomId(undefined);
+      return true;
+    }, [footprintEditRoomId, resolvedPaintDraft?.roomId, setFootprintEditRoomId]);
 
     const applyZoom = (nextZoom: number) => {
       const centerWorld = {
@@ -524,6 +769,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
         if (corridor) { for (const p of corridor.points) expand(p.x - corridor.width, p.y - corridor.width, corridor.width * 2, corridor.width * 2); continue; }
         const door = map.doorways.find((d) => d.id === id);
         if (door) { expand(door.position.x - 30, door.position.y - 30, 60, 60); continue; }
+        const prop = map.props.find((p) => p.id === id);
+        if (prop) { expand(prop.position.x - 32, prop.position.y - 32, 64, 64); continue; }
         const marker = map.markers.find((m) => m.id === id);
         if (marker) { expand(marker.position.x - 20, marker.position.y - 20, 40, 40); continue; }
         const note = map.notesBoard.find((n) => n.id === id);
@@ -549,6 +796,8 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       fitSelection,
       zoomIn: () => applyZoom(clamp(map.view.zoom * 1.12, 0.32, 3)),
       zoomOut: () => applyZoom(clamp(map.view.zoom / 1.12, 0.32, 3)),
+      commitFootprintEdit,
+      cancelFootprintEdit,
     }));
 
     useEffect(() => {
@@ -587,6 +836,25 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     }, [fitToMap, map.id, map.view.hasUserAdjusted, map.view.pan.x, map.view.pan.y, map.view.zoom, size.height, size.width, updateMapView]);
 
     useEffect(() => {
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.code === 'Space' && !isTypingTarget(event.target as EventTarget | null)) {
+          setSpacePressed(true);
+        }
+      };
+      const onKeyUp = (event: KeyboardEvent) => {
+        if (event.code === 'Space') {
+          setSpacePressed(false);
+        }
+      };
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup', onKeyUp);
+      return () => {
+        window.removeEventListener('keydown', onKeyDown);
+        window.removeEventListener('keyup', onKeyUp);
+      };
+    }, []);
+
+    useEffect(() => {
       const node = grainRef.current;
       if (!node) return;
       node.cache({ pixelRatio: 1 });
@@ -604,7 +872,15 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
         Konva.dragButtons = [...defaultDragButtonsRef.current];
       };
       const syncDragButtons = (event: MouseEvent) => {
-        Konva.dragButtons = event.button === 2 ? [2] : [...defaultDragButtonsRef.current];
+        if (event.button === 1) {
+          Konva.dragButtons = [1];
+          return;
+        }
+        if (event.button === 0 && spacePressed) {
+          Konva.dragButtons = [0];
+          return;
+        }
+        Konva.dragButtons = [...defaultDragButtonsRef.current];
       };
       const preventContextMenu = (event: MouseEvent) => {
         event.preventDefault();
@@ -620,16 +896,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
         window.removeEventListener('mouseup', restoreDragButtons);
         restoreDragButtons();
       };
-    }, []);
-
-    const getWorldPosition = () => {
-      const stage = stageRef.current;
-      if (!stage) return undefined;
-      const pointer = stage.getPointerPosition();
-      if (!pointer) return undefined;
-      const transform = stage.getAbsoluteTransform().copy().invert();
-      return snapPoint(transform.point(pointer), map);
-    };
+    }, [spacePressed]);
 
     const entityOpacity = (state: string) =>
       map.view.dimUnknown && (state === 'unknown' || state === 'suspected') ? 0.55 : 1;
@@ -648,7 +915,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       stage.startDrag(event.evt);
     };
 
-    const finishEntityDrag = (kind: 'floor_room' | 'doorway' | 'marker' | 'note' | 'anchor', id: string) =>
+    const finishEntityDrag = (kind: 'floor_room' | 'doorway' | 'prop' | 'marker' | 'note' | 'anchor', id: string) =>
       (event: KonvaEventObject<DragEvent>) => {
         if (event.evt.button === 2) return;
         moveEntity(kind, id, { x: event.target.x(), y: event.target.y() });
@@ -685,18 +952,66 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     };
 
     const stageMouseDown = (event: KonvaEventObject<MouseEvent>) => {
+      if (event.evt.button === 1 || (event.evt.button === 0 && spacePressed)) {
+        return;
+      }
+
+      const world = getPointerWorld();
+      if (!world) return;
+      const position = snapPoint(world, map);
+      setCanvasCursor(world, position);
+      const cell = worldToGridCell(position, map.view.gridSize);
+
+      if (activeTool === 'floorRoom' && toolSettings.roomPlacement === 'paint' && (event.evt.button === 0 || event.evt.button === 2)) {
+        event.evt.preventDefault();
+        const subtract = event.evt.button === 2 || event.evt.altKey || toolSettings.roomPaintMode === 'subtract';
+        const baseDraft = resolvedPaintDraft?.current
+          ? new Set(resolvedPaintDraft.current)
+          : footprintEditRoomId
+            ? footprintToCellSet(
+                getRoomFootprint(map.floorRooms.find((entry) => entry.id === footprintEditRoomId) ?? {
+                  bounds: { x: 0, y: 0, width: 0, height: 0 },
+                  footprint: [],
+                }),
+                map.view.gridSize,
+              )
+            : new Set<string>();
+
+        setPaintDrag({
+          roomId: footprintEditRoomId,
+          subtract,
+          rectangle: event.evt.shiftKey,
+          startCell: cell,
+          base: new Set(baseDraft),
+        });
+        setPaintDraft({
+          roomId: footprintEditRoomId,
+          original: resolvedPaintDraft?.original ?? new Set(baseDraft),
+          current: event.evt.shiftKey
+            ? applyRectangleCells(baseDraft, cell, cell, subtract)
+            : applyBrushCells(baseDraft, cell, toolSettings.roomPaintBrush, subtract),
+        });
+        return;
+      }
+
       if (event.evt.button === 2) {
         event.evt.preventDefault();
         return;
       }
 
       const isBlank = event.target === event.target.getStage();
-      const position = getWorldPosition();
-      if (!position) return;
 
       if (activeTool === 'doorway') {
         const snapped = snapDoorwayToFloorplan(position, map);
         addDoorwayAt(snapped.position, snapped.orientation, snapped.attachedRoomId);
+        return;
+      }
+
+      if (activeTool === 'prop') {
+        addPropAt({
+          x: (cell.gx + 0.5) * map.view.gridSize,
+          y: (cell.gy + 0.5) * map.view.gridSize,
+        });
         return;
       }
 
@@ -735,16 +1050,30 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
         return;
       }
 
+      if (activeTool === 'measure') {
+        setMeasureDraft({ start: position, current: position });
+        return;
+      }
+
       if (!isBlank) return;
 
       if (activeTool === 'floorRoom') {
         if (toolSettings.roomPlacement === 'stamp') {
-          addFloorRoom({
-            x: position.x - 120,
-            y: position.y - 84,
-            width: 240,
-            height: 168,
-          });
+          const nextRotation = event.evt.shiftKey
+            ? ((toolSettings.roomStampRotation + 90) % 360) as 0 | 90 | 180 | 270
+            : toolSettings.roomStampRotation;
+          addFloorRoomFootprint(
+            buildStampFootprint(
+              position,
+              map.view.gridSize,
+              toolSettings.roomStampSize,
+              toolSettings.roomStampShape,
+              nextRotation,
+            ),
+          );
+          if (nextRotation !== toolSettings.roomStampRotation) {
+            setToolSettings({ roomStampRotation: nextRotation });
+          }
           return;
         }
         setDraftRect({ start: position, current: position });
@@ -755,11 +1084,33 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     };
 
     const stageMouseMove = () => {
-      const position = getWorldPosition();
-      if (!position) return;
+      const world = getPointerWorld();
+      if (!world) return;
+      const position = snapPoint(world, map);
+      setCanvasCursor(world, position);
+      setHoverCell(worldToGridCell(position, map.view.gridSize));
 
       if (draftRect) {
         setDraftRect((current) => (current ? { ...current, current: position } : current));
+        return;
+      }
+
+      if (measureDraft) {
+        setMeasureDraft((current) => (current ? { ...current, current: position } : current));
+        return;
+      }
+
+      if (paintDrag) {
+        const currentCell = worldToGridCell(position, map.view.gridSize);
+        setPaintDraft((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            current: paintDrag.rectangle
+              ? applyRectangleCells(paintDrag.base, paintDrag.startCell, currentCell, paintDrag.subtract)
+              : applyBrushCells(current.current, currentCell, toolSettings.roomPaintBrush, paintDrag.subtract),
+          };
+        });
         return;
       }
 
@@ -775,6 +1126,27 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     };
 
     const stageMouseUp = (event: KonvaEventObject<MouseEvent>) => {
+      if (event.evt.button === 1 || (event.evt.button === 0 && spacePressed)) return;
+
+      if (measureDraft) {
+        setMeasureDraft(null);
+      }
+
+      if (paintDrag) {
+        if (!paintDrag.roomId && resolvedPaintDraft) {
+          const largest = getLargestContiguousCellComponent(resolvedPaintDraft.current);
+          if (largest.size > 0) {
+            if (largest.size !== resolvedPaintDraft.current.size) {
+              toast('Room footprint must be contiguous; discarded detached islands.');
+            }
+            addFloorRoomFootprint(compressCellsToFootprint(largest, map.view.gridSize));
+          }
+          setPaintDraft(null);
+        }
+        setPaintDrag(null);
+        return;
+      }
+
       if (event.evt.button === 2) return;
 
       if (draftRect) {
@@ -821,15 +1193,22 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
 
     const currentHint = useMemo(() => {
       if (activeTool === 'floorRoom') {
+        if (toolSettings.roomPlacement === 'paint') {
+          return footprintEditRoomId
+            ? 'Paint room cells. Enter commits the footprint, Esc cancels.'
+            : 'Paint orthogonal room cells on the grid. Hold Alt or right-drag to subtract.';
+        }
         return toolSettings.roomPlacement === 'stamp'
           ? 'Click once to stamp a quick chamber.'
           : 'Click-drag to block out a room footprint.';
       }
       if (activeTool === 'corridor') return 'Drag an orthogonal hallway between connected spaces.';
       if (activeTool === 'doorway') return 'Click near a room or corridor edge to place a doorway.';
+      if (activeTool === 'prop') return 'Place props and chests snapped to the grid.';
       if (activeTool === 'marker') return 'Drop hazard, loot, secret, or save markers over the floorplan.';
       if (activeTool === 'route') return 'Paint a red route overlay to mark confirmed exploration paths.';
       if (activeTool === 'sketch') return 'Freehand red-ink markup for theory crafting and route notes.';
+      if (activeTool === 'measure') return 'Click-drag to measure world distance and grid cells.';
       if (activeTool === 'erase') {
         return toolSettings.eraseMode === 'segment'
           ? 'Click specific segments and primitives to remove them.'
@@ -837,7 +1216,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       }
       if (editorMode === 'navigate' && activeTool === 'select') return 'Use linked doorway hotspots to jump between maps.';
       return 'Select, pan, inspect, and annotate the active floorplan.';
-    }, [activeTool, editorMode, toolSettings.eraseMode, toolSettings.roomPlacement]);
+    }, [activeTool, editorMode, footprintEditRoomId, toolSettings.eraseMode, toolSettings.roomPlacement]);
 
     const showHotspots = activeTool === 'select';
     const surfaceStyle = surfacePalette[map.view.floorSurfaceStyle];
@@ -869,9 +1248,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           y={map.view.pan.y}
           scaleX={map.view.zoom}
           scaleY={map.view.zoom}
-          draggable={draftKind === null && !draftRect}
+          draggable={draftKind === null && !draftRect && !paintDrag && !measureDraft}
           onDragStart={(event) => {
-            if (event.evt.button !== 2) {
+            if (event.evt.button !== 1 && !(event.evt.button === 0 && spacePressed)) {
               event.target.stopDrag();
             }
           }}
@@ -880,6 +1259,10 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           onMouseDown={stageMouseDown}
           onMouseMove={stageMouseMove}
           onMouseUp={stageMouseUp}
+          onMouseLeave={() => {
+            setHoverCell(null);
+            setCanvasCursor(undefined, undefined);
+          }}
           onWheel={onWheel}
         >
           <Layer listening={false}>
@@ -1319,6 +1702,70 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                 ))
               : null}
             {layerVisibleForPreset(map, 'icons')
+              ? map.props.map((entry) => {
+                  const asset = findAsset(entry.assetId);
+                  const iconId = asset?.defaultIconId ?? 'question-mark';
+                  const isSelected = selection.kind === 'prop' && selection.ids.includes(entry.id);
+                  const tileRole = getTileRoleForAsset(entry.assetId, entry.state);
+                  const tileId =
+                    map.view.renderStyle2d === 'tile' && map.tileGrid && tilePack && tileRole
+                      ? getBestTileForRoleOrFallback(tilePack, tileRole)
+                      : undefined;
+                  const tileDef = tilePack && tileId ? getTileDefById(tilePack, tileId) : undefined;
+                  const drawScale = Math.max(0.5, entry.scale || 1);
+                  const tileSize = map.tileGrid?.tileSizePx ?? 24;
+                  const tileDrawSize = tileSize * drawScale;
+                  return (
+                    <Group
+                      draggable={activeTool === 'select'}
+                      key={entry.id}
+                      onClick={handleEntitySelection('prop', entry.id)}
+                      onDragStart={handOffRightButtonDragToStage}
+                      onDragEnd={finishEntityDrag('prop', entry.id)}
+                      x={entry.position.x}
+                      y={entry.position.y}
+                      rotation={entry.rotationDeg}
+                    >
+                      {tileDef && tilePack ? (
+                        <>
+                          {isSelected ? (
+                            <Circle
+                              radius={tileDrawSize * 0.72}
+                              fill="rgba(24, 20, 18, 0.84)"
+                              stroke={selectionStroke}
+                              strokeWidth={2.6}
+                            />
+                          ) : null}
+                          <KonvaImage
+                            image={tilePack.atlasImage}
+                            x={-tileDrawSize / 2}
+                            y={-tileDrawSize / 2}
+                            width={tileDrawSize}
+                            height={tileDrawSize}
+                            crop={{
+                              x: tileDef.atlasX,
+                              y: tileDef.atlasY,
+                              width: tileDef.atlasW,
+                              height: tileDef.atlasH,
+                            }}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <Circle
+                            radius={18 * drawScale}
+                            fill="rgba(24, 20, 18, 0.92)"
+                            stroke={isSelected ? selectionStroke : '#b89666'}
+                            strokeWidth={2.6}
+                          />
+                          <CanvasVectorIcon iconId={iconId} size={20 * drawScale} x={0} y={0} />
+                        </>
+                      )}
+                    </Group>
+                  );
+                })
+              : null}
+            {layerVisibleForPreset(map, 'icons')
               ? map.markers.map((entry) => (
                   <Group
                     draggable={activeTool === 'select'}
@@ -1398,6 +1845,32 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                 cornerRadius={24}
               />
             ) : null}
+            {resolvedPaintDraft
+              ? compressCellsToFootprint(resolvedPaintDraft.current, map.view.gridSize).map((rect, index) => (
+                  <Rect
+                    key={`paint-footprint-${index}`}
+                    x={rect.x}
+                    y={rect.y}
+                    width={rect.width}
+                    height={rect.height}
+                    fill="rgba(185, 149, 86, 0.18)"
+                    stroke={selectionStroke}
+                    strokeWidth={2}
+                    dash={[8, 6]}
+                  />
+                ))
+              : null}
+            {hoverCell && activeTool === 'floorRoom' && toolSettings.roomPlacement === 'paint' ? (
+              <Rect
+                x={hoverCell.gx * map.view.gridSize}
+                y={hoverCell.gy * map.view.gridSize}
+                width={map.view.gridSize}
+                height={map.view.gridSize}
+                fill="rgba(255, 230, 180, 0.08)"
+                stroke="rgba(255, 230, 180, 0.55)"
+                strokeWidth={1.5}
+              />
+            ) : null}
             {draftPath.length > 1 ? (
               <>
                 {draftKind === 'corridor' ? (
@@ -1463,6 +1936,32 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                 )}
               </>
             ) : null}
+            {measureDraft ? (
+              <>
+                <Line
+                  points={[measureDraft.start.x, measureDraft.start.y, measureDraft.current.x, measureDraft.current.y]}
+                  stroke={selectionStroke}
+                  strokeWidth={3}
+                  dash={[10, 8]}
+                />
+                <Text
+                  x={(measureDraft.start.x + measureDraft.current.x) / 2 + 12}
+                  y={(measureDraft.start.y + measureDraft.current.y) / 2 - 24}
+                  text={`${Math.round(Math.hypot(measureDraft.current.x - measureDraft.start.x, measureDraft.current.y - measureDraft.start.y))}u / ${(
+                    Math.hypot(measureDraft.current.x - measureDraft.start.x, measureDraft.current.y - measureDraft.start.y) / map.view.gridSize
+                  ).toFixed(1)} cells${
+                    map.view.renderStyle2d === 'tile' && map.tileGrid
+                      ? ` / ~${(
+                          Math.hypot(measureDraft.current.x - measureDraft.start.x, measureDraft.current.y - measureDraft.start.y) / map.tileGrid.tileSizePx
+                        ).toFixed(1)} tiles`
+                      : ''
+                  }`}
+                  fontFamily="IBM Plex Mono"
+                  fontSize={13}
+                  fill="#f4e7d2"
+                />
+              </>
+            ) : null}
             {(editorMode === 'graph' || map.view.showLegacyGraph) && map.rooms.length ? (
               <Group opacity={0.2}>
                 {map.paths.map((path) => (
@@ -1492,7 +1991,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           </Layer>
         </Stage>
 
-        {map.view.showToolHints && !embedded ? (
+        {map.view.showToolHints ? (
           <div className="canvas-hint-overlay">
             <span className="section-eyebrow">Tool Hint</span>
             <strong>{currentHint}</strong>

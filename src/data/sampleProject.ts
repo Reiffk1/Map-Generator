@@ -40,9 +40,11 @@ export const createDefaultView = (): MapViewSettings => ({
   zoom: 1,
   pan: { x: 0, y: 0 },
   hasUserAdjusted: false,
-  renderMode: 'editor_2d',
+  viewMode: 'plan_2d',
+  fogMode3d: 'cone',
   renderStyle2d: 'tile',
   assetPackId: 'default-pixel',
+  stylePackId: 'stonekeep',
   showGrid: true,
   snapToGrid: true,
   gridSize: 48,
@@ -62,6 +64,9 @@ export const createDefaultView = (): MapViewSettings => ({
   wallStyle: 'stone',
   overlayPreset: 'all',
   lightPreset: 'torch',
+  orbitDistance: 780,
+  followDistance: 260,
+  quality3d: 'medium',
 });
 
 const floorRoom = (mapId: string, input: Partial<FloorRoom> & Pick<FloorRoom, 'id' | 'label' | 'bounds'>): FloorRoom => ({
@@ -219,12 +224,17 @@ const zone = (mapId: string, input: Partial<RegionZone> & Pick<RegionZone, 'id' 
 });
 
 const mapFromFloorplan = (
-  base: Omit<MapRecord, 'rooms' | 'paths' | 'wallSegments'> & { floorRooms: FloorRoom[]; corridors: CorridorSegment[] },
+  base: Omit<MapRecord, 'rooms' | 'paths' | 'wallSegments' | 'props'> & {
+    floorRooms: FloorRoom[];
+    corridors: CorridorSegment[];
+    props?: MapRecord['props'];
+  },
 ): MapRecord => ({
   ...base,
   rooms: base.floorRooms.map(legacyRoom),
   paths: base.corridors.map(pathFromCorridor),
   wallSegments: base.floorRooms.flatMap((room) => buildRoomWalls(layerId(base.id, 'rooms'), room)),
+  props: base.props ?? [],
 });
 
 const chapelId = 'map_red_chapel';
@@ -374,6 +384,7 @@ export const sampleProject: ProjectRecord = (() => {
     updatedAt: createdAt,
     globalTags: ['secret', 'revisit', 'key', 'boss', 'shortcut', 'drainage'],
     iconFavorites: ['door', 'locked-door', 'save-point', 'key-item', 'possible-secret', 'return-later'],
+    assetFavorites: ['door.wood.basic', 'chest.wood.small', 'prop.barrel', 'prop.torch.wall'],
     recentIcons: ['save-point', 'possible-secret', 'key-item', 'npc', 'puzzle'],
     uploadedIcons: [],
     settings: { themeAccent: '#9f3038', defaultMapStyle: 'floorplan', defaultIconStyle: 'outlined', defaultMode: 'floorplan', textScale: 'md', iconScale: 'md', spoilerMode: 'mixed' },
@@ -412,6 +423,7 @@ export const createBlankProject = (template: ProjectTemplate = 'blank'): Project
     updatedAt: createdAt,
     globalTags: [],
     iconFavorites: ['door', 'question-mark', 'loot', 'return-later'],
+    assetFavorites: ['door.wood.basic', 'chest.wood.small'],
     recentIcons: [],
     uploadedIcons: [],
     settings: { themeAccent: '#9f3038', defaultMapStyle: 'floorplan', defaultIconStyle: 'outlined', defaultMode: 'floorplan', textScale: 'md', iconScale: 'md', spoilerMode: 'mixed' },
@@ -436,6 +448,7 @@ export const createBlankProject = (template: ProjectTemplate = 'blank'): Project
       routeOverlays: [],
       transitions: [],
       anchors: [],
+      props: [],
       markers: [],
       notesBoard: [],
       zones: [],

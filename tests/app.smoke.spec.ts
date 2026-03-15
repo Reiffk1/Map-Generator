@@ -168,14 +168,20 @@ test('supports explorer search, review flows, and inspector editing', async ({ p
   await page.getByLabel('Transition').fill('Exit Revised');
   await expect(page.getByLabel('Select Exit Revised')).toBeVisible();
 
-  await page.getByTestId('topbar-more-menu').click();
-  await page.getByTestId('toggle-3d-preview').click();
+  await page.evaluate(() => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    debug.store.getState().setViewMode('third_orbit');
+  });
   await expect(page.getByTestId('map-3d-canvas')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reset Camera' })).toBeVisible();
   await expect(page.getByRole('button', { name: /First Person/ })).toBeVisible();
   await expect(page).toHaveScreenshot('cinematic-preview-open.png');
-  await page.getByTestId('topbar-more-menu').click();
-  await page.getByTestId('toggle-3d-preview').click();
+  await page.evaluate(() => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    debug.store.getState().setViewMode('plan_2d');
+  });
   await expect(page.getByTestId('fit-map-button')).toBeVisible();
 
   await assertRuntimeHealth(page, runtime);
@@ -311,15 +317,21 @@ test('generates a tilemap dungeon and previews it in 3D', async ({ page }) => {
   await expect(page.getByTestId('map-tabs')).toContainText('Generated Dungeon');
   await expect(page).toHaveScreenshot('generated-dungeon.png');
 
-  await page.getByTestId('topbar-more-menu').click();
-  await page.getByTestId('toggle-3d-preview').click();
+  await page.evaluate(() => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    debug.store.getState().setViewMode('third_orbit');
+  });
   await expect(page.getByTestId('map-3d-canvas')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reset Camera' })).toBeVisible();
   await expect(page.getByRole('button', { name: /First Person/ })).toBeVisible();
   await expect(page).toHaveScreenshot('generated-dungeon-3d.png');
 
-  await page.getByTestId('topbar-more-menu').click();
-  await page.getByTestId('toggle-3d-preview').click();
+  await page.evaluate(() => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    debug.store.getState().setViewMode('plan_2d');
+  });
   await expect(page.getByTestId('map-canvas')).toBeVisible();
 
   await assertRuntimeHealth(page, runtime);

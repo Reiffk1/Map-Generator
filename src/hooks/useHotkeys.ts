@@ -1,10 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 
-import { useAppStore, selectActiveMap } from '../store/useAppStore';
-
-const PAN_SPEED = 12;
-const ZOOM_KEY_STEP = 0.06;
-const SMOOTH_FACTOR = 0.25;
+import { selectActiveMap, useAppStore } from '../store/useAppStore';
+import type { ToolType, TransitionType, ViewMode } from '../models/types';
 
 const isTypingTarget = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement | null;
@@ -17,80 +14,83 @@ const isTypingTarget = (event: KeyboardEvent) => {
   );
 };
 
+const viewOrder: ViewMode[] = ['plan_2d', 'second_follow', 'third_orbit', 'first_walk'];
+const toolByKey: Record<string, ToolType> = {
+  v: 'select',
+  r: 'floorRoom',
+  c: 'corridor',
+  w: 'wall',
+  d: 'doorway',
+  p: 'prop',
+  m: 'marker',
+  n: 'note',
+  a: 'anchor',
+  t: 'route',
+  k: 'sketch',
+  e: 'erase',
+  i: 'measure',
+};
+const doorwayStyles = ['door.wood.basic', 'door.iron.band', 'door.secret.panel', 'door.boss.double'];
+const transitionCycle: TransitionType[] = ['door', 'gate', 'portcullis', 'stairs_up', 'stairs_down', 'ladder', 'warp'];
+const stampShapeCycle = ['rectangle', 'l_shape', 't_shape', 'cross'] as const;
+
+const focusSearchInput = () => {
+  const input = document.querySelector<HTMLInputElement>('[data-testid="top-search"]');
+  input?.focus();
+  input?.select();
+};
+
+const clickAction = (selector: string) => {
+  const button = document.querySelector<HTMLElement>(selector);
+  button?.click();
+};
+
+const cycleIndex = <T,>(items: T[], current: T, direction: -1 | 1 = 1) => {
+  const index = items.indexOf(current);
+  if (index === -1) return items[0];
+  return items[(index + direction + items.length) % items.length];
+};
+
 export const useHotkeys = () => {
   const undo = useAppStore((state) => state.undo);
   const redo = useAppStore((state) => state.redo);
-  const setEditorMode = useAppStore((state) => state.setEditorMode);
   const setActiveTool = useAppStore((state) => state.setActiveTool);
+  const setViewMode = useAppStore((state) => state.setViewMode);
   const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
   const duplicateSelection = useAppStore((state) => state.duplicateSelection);
   const deleteSelection = useAppStore((state) => state.deleteSelection);
+  const clearSelection = useAppStore((state) => state.clearSelection);
   const cycleSelectionState = useAppStore((state) => state.cycleSelectionState);
   const updateMapView = useAppStore((state) => state.updateMapView);
-
-  const pressedKeys = useRef(new Set<string>());
-  const rafRef = useRef(0);
-  const targetPan = useRef({ x: 0, y: 0 });
-  const currentPan = useRef({ x: 0, y: 0 });
+  const toggleSidebar = useAppStore((state) => state.toggleSidebar);
+  const toggleFocusMode = useAppStore((state) => state.toggleFocusMode);
+  const openMap = useAppStore((state) => state.openMap);
+  const setToolSettings = useAppStore((state) => state.setToolSettings);
+  const setBottomPanelTab = useAppStore((state) => state.setBottomPanelTab);
 
   useEffect(() => {
-    const tick = () => {
-      const keys = pressedKeys.current;
-      if (keys.size === 0) {
-        rafRef.current = 0;
-        return;
-      }
-
-      const map = selectActiveMap(useAppStore.getState());
-      let dx = 0;
-      let dy = 0;
-      const speed = PAN_SPEED / map.view.zoom;
-
-      if (keys.has('arrowleft') || keys.has('a')) dx += speed;
-      if (keys.has('arrowright') || keys.has('d')) dx -= speed;
-      if (keys.has('arrowup') || keys.has('w')) dy += speed;
-      if (keys.has('arrowdown') || keys.has('s')) dy -= speed;
-
-      if (dx !== 0 || dy !== 0) {
-        targetPan.current = {
-          x: map.view.pan.x + dx,
-          y: map.view.pan.y + dy,
-        };
-        currentPan.current = {
-          x: currentPan.current.x + (targetPan.current.x - currentPan.current.x) * SMOOTH_FACTOR,
-          y: currentPan.current.y + (targetPan.current.y - currentPan.current.y) * SMOOTH_FACTOR,
-        };
-        updateMapView({ pan: { x: currentPan.current.x, y: currentPan.current.y } });
-      }
-
-      rafRef.current = requestAnimationFrame(tick);
-    };
-
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
-      const map = selectActiveMap(useAppStore.getState());
-      const preview3dActive = map.view.renderMode === 'preview_3d';
-      const isPanKey = ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key) ||
-        (!isTypingTarget(event) && !preview3dActive && ['w', 'a', 's', 'd'].includes(key));
+      const modifier = event.metaKey || event.ctrlKey;
+      const typing = isTypingTarget(event);
+      const state = useAppStore.getState();
+      const map = selectActiveMap(state);
 
-      if (!preview3dActive && isPanKey && !isTypingTarget(event)) {
-        event.preventDefault();
-        pressedKeys.current.add(key);
-        currentPan.current = { x: map.view.pan.x, y: map.view.pan.y };
-        targetPan.current = { ...currentPan.current };
-        if (!rafRef.current) rafRef.current = requestAnimationFrame(tick);
+      if (typing && !(modifier || key === 'escape')) {
         return;
       }
-
-      if (isTypingTarget(event)) {
-        if (!(event.metaKey || event.ctrlKey) || key !== 'k') return;
-      }
-
-      const modifier = event.metaKey || event.ctrlKey;
 
       if (modifier && key === 'k') {
         event.preventDefault();
         setCommandPaletteOpen(true);
+        return;
+      }
+
+      if (modifier && key === 'f') {
+        event.preventDefault();
+        setBottomPanelTab('search');
+        if (!state.showBottomPanel) toggleSidebar('bottom');
+        focusSearchInput();
         return;
       }
 
@@ -100,7 +100,7 @@ export const useHotkeys = () => {
         return;
       }
 
-      if ((modifier && event.shiftKey && key === 'z') || (modifier && key === 'y')) {
+      if (modifier && event.shiftKey && key === 'z') {
         event.preventDefault();
         redo();
         return;
@@ -112,9 +112,107 @@ export const useHotkeys = () => {
         return;
       }
 
+      if (modifier && key === 'b') {
+        event.preventDefault();
+        toggleSidebar('left');
+        return;
+      }
+
+      if (modifier && key === 'i') {
+        event.preventDefault();
+        toggleSidebar('right');
+        return;
+      }
+
+      if (modifier && key === 'j') {
+        event.preventDefault();
+        toggleSidebar('bottom');
+        return;
+      }
+
+      if (modifier && key === 'pagedown') {
+        event.preventDefault();
+        const index = state.workspace.openMapIds.indexOf(state.workspace.activeMapId);
+        const nextId = state.workspace.openMapIds[(index + 1) % state.workspace.openMapIds.length];
+        if (nextId) openMap(nextId, { pushHistory: false });
+        return;
+      }
+
+      if (modifier && key === 'pageup') {
+        event.preventDefault();
+        const index = state.workspace.openMapIds.indexOf(state.workspace.activeMapId);
+        const nextId = state.workspace.openMapIds[(index - 1 + state.workspace.openMapIds.length) % state.workspace.openMapIds.length];
+        if (nextId) openMap(nextId, { pushHistory: false });
+        return;
+      }
+
+      if (modifier && key === '0') {
+        event.preventDefault();
+        if (event.altKey) clickAction('[data-testid="fit-selection-button"]');
+        else clickAction('[data-testid="fit-map-button"]');
+        return;
+      }
+
       if (key === 'delete' || key === 'backspace') {
         event.preventDefault();
         deleteSelection();
+        return;
+      }
+
+      if (key === 'escape') {
+        if (state.commandPaletteOpen) {
+          event.preventDefault();
+          setCommandPaletteOpen(false);
+          return;
+        }
+        if (map.view.viewMode === 'first_walk') {
+          event.preventDefault();
+          setViewMode('second_follow');
+          return;
+        }
+        if (map.view.viewMode === 'second_follow') {
+          event.preventDefault();
+          setViewMode('plan_2d');
+          return;
+        }
+        if (state.footprintEditRoomId) {
+          event.preventDefault();
+          useAppStore.getState().setFootprintEditRoomId(undefined);
+          return;
+        }
+        if (state.selection.kind !== 'none') {
+          event.preventDefault();
+          clearSelection();
+          return;
+        }
+        if (state.focusMode) {
+          event.preventDefault();
+          toggleFocusMode();
+        }
+        return;
+      }
+
+      if (typing) return;
+
+      if (event.altKey && ['1', '2', '3', '4'].includes(key)) {
+        event.preventDefault();
+        setViewMode(viewOrder[Number(key) - 1] ?? 'plan_2d');
+        return;
+      }
+
+      if (key === 'f') {
+        event.preventDefault();
+        toggleFocusMode();
+        return;
+      }
+
+      if (key === 'g') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          updateMapView({ showMinimap: !map.view.showMinimap });
+        } else {
+          updateMapView({ showGrid: !map.view.showGrid });
+        }
         return;
       }
 
@@ -124,64 +222,80 @@ export const useHotkeys = () => {
         return;
       }
 
-      if (key === '=' || key === '+') {
+      if (key === '[' || key === ']') {
         event.preventDefault();
-        const next = Math.min(3, map.view.zoom * (1 + ZOOM_KEY_STEP));
-        updateMapView({ zoom: next });
+        const delta = key === '[' ? -1 : 1;
+        if (state.activeTool === 'floorRoom') {
+          if (state.toolSettings.roomPlacement === 'paint') {
+            const next = Math.max(1, Math.min(5, state.toolSettings.roomPaintBrush + delta)) as 1 | 2 | 3 | 4 | 5;
+            setToolSettings({ roomPaintBrush: next });
+            return;
+          }
+          const stampSizes = [6, 8, 10] as const;
+          const next = cycleIndex([...stampSizes], state.toolSettings.roomStampSize, delta === -1 ? -1 : 1);
+          setToolSettings({ roomStampSize: next });
+          return;
+        }
+        if (state.activeTool === 'corridor') {
+          setToolSettings({ corridorWidth: Math.max(24, Math.min(160, state.toolSettings.corridorWidth + delta * 8)) });
+          return;
+        }
+        if (state.activeTool === 'sketch') {
+          setToolSettings({ sketchWidth: Math.max(1, Math.min(24, state.toolSettings.sketchWidth + delta)) });
+        }
         return;
       }
 
-      if (key === '-' || key === '_') {
+      if (key === 'tab' && state.activeTool === 'floorRoom' && state.toolSettings.roomPlacement === 'stamp') {
         event.preventDefault();
-        const next = Math.max(0.32, map.view.zoom * (1 - ZOOM_KEY_STEP));
-        updateMapView({ zoom: next });
-        return;
-      }
-
-      if (key === '1') setEditorMode('floorplan');
-      if (key === '2') setEditorMode('graph');
-      if (key === '3') setEditorMode('ink');
-      if (key === '4') setEditorMode('portal');
-      if (key === '5') setEditorMode('navigate');
-      if (key === '6') setEditorMode('review');
-
-      if (key === 'v') setActiveTool('select');
-      if (key === 'r') setActiveTool('floorRoom');
-      if (key === 'c') setActiveTool('corridor');
-      if (key === 'm') setActiveTool('marker');
-      if (key === 'n') setActiveTool('note');
-      if (key === 'p') setActiveTool('route');
-      if (key === 'x') setActiveTool('erase');
-
-      if (key === 'g') {
-        const current = useAppStore.getState();
-        updateMapView({
-          showGrid: !current.workspace.projects
-            .find((project) => project.id === current.workspace.activeProjectId)
-            ?.maps.find((map) => map.id === current.workspace.activeMapId)?.view.showGrid,
+        setToolSettings({
+          roomStampShape: cycleIndex(
+            [...stampShapeCycle],
+            state.toolSettings.roomStampShape,
+            event.shiftKey ? -1 : 1,
+          ),
         });
+        return;
       }
-    };
 
-    const onKeyUp = (event: KeyboardEvent) => {
-      pressedKeys.current.delete(event.key.toLowerCase());
+      if (key === 'd' && event.shiftKey) {
+        event.preventDefault();
+        const currentStyle = state.toolSettings.doorStyleId ?? doorwayStyles[0];
+        setToolSettings({ doorStyleId: cycleIndex(doorwayStyles, currentStyle) });
+        return;
+      }
+
+      if (key === 'd' && event.altKey) {
+        event.preventDefault();
+        setToolSettings({ transitionType: cycleIndex(transitionCycle, state.toolSettings.transitionType) });
+        return;
+      }
+
+      const tool = toolByKey[key];
+      if (tool) {
+        event.preventDefault();
+        setActiveTool(tool);
+      }
     };
 
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [
+    clearSelection,
     cycleSelectionState,
     deleteSelection,
     duplicateSelection,
+    openMap,
     redo,
     setActiveTool,
+    setBottomPanelTab,
     setCommandPaletteOpen,
-    setEditorMode,
+    setToolSettings,
+    setViewMode,
+    toggleFocusMode,
+    toggleSidebar,
     undo,
     updateMapView,
   ]);

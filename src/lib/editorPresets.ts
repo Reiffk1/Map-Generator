@@ -10,7 +10,8 @@ import type {
 
 export const roomPlacementOptions: Array<{ value: RoomPlacementMode; label: string; detail: string }> = [
   { value: 'rectangle', label: 'Rectangle', detail: 'Click-drag a literal chamber footprint.' },
-  { value: 'stamp', label: 'Stamp', detail: 'Click once to drop a quick chamber block.' },
+  { value: 'paint', label: 'Paint', detail: 'Paint an orthogonal room footprint on the grid.' },
+  { value: 'stamp', label: 'Stamp', detail: 'Click once to drop a parametric chamber block.' },
 ];
 
 export const roomTypeOptions: Array<{ value: FloorRoomType; label: string; color: string }> = [
@@ -115,9 +116,17 @@ export const markerPresetOptions: Array<{
 export const defaultToolSettings: ToolSettings = {
   roomPlacement: 'rectangle',
   roomType: 'chamber',
+  roomPaintBrush: 1,
+  roomPaintMode: 'add',
+  roomStampSize: 6,
+  roomStampShape: 'rectangle',
+  roomStampRotation: 0,
   corridorWidth: 72,
   transitionType: 'door',
+  doorStyleId: 'door.wood.basic',
+  propAssetId: 'chest.wood.small',
   markerPreset: 'hazard',
+  sketchWidth: 5,
   eraseMode: 'entity',
 };
 
@@ -131,4 +140,4 @@ export const getMarkerPresetDefinition = (preset: MarkerPlacementPreset) =>
   markerPresetOptions.find((option) => option.value === preset) ?? markerPresetOptions[0];
 
 export const describeRoomPlacement = (placement: RoomPlacementMode) =>
-  placement === 'stamp' ? 'Stamped chamber' : 'Mapped chamber';
+  placement === 'stamp' ? 'Stamped chamber' : placement === 'paint' ? 'Painted footprint' : 'Mapped chamber';

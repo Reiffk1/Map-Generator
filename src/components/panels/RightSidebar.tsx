@@ -1,7 +1,10 @@
-import { useMemo, useRef, useState, type ChangeEvent, type PropsWithChildren } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PropsWithChildren } from 'react';
 
 import { SvgMapIcon, builtInIconLibrary } from '../../data/iconLibrary';
+import { getBestTileForRoleOrFallback, loadAssetPack } from '../../lib/assets/assetPacks';
+import { assetCatalog, findAsset, getTileRoleForAsset, searchAssets } from '../../lib/assets/catalog';
 import { getRoomBounds, roomHasIrregularFootprint } from '../../lib/floorplan';
+import { formatHotkeyHelp } from '../../lib/hotkeys';
 import { findDoorPairSuggestions } from '../../lib/pathfinding';
 import { makeId } from '../../lib/utils';
 import type {
@@ -10,10 +13,11 @@ import type {
   MapRecord,
   MarkerRecord,
   NoteRecord,
+  PropRecord,
   ProjectRecord,
   TransitionRecord,
 } from '../../models/types';
-import { DEFAULT_GENERATOR_PARAMS, type GeneratorParams } from '../../models/tilemap';
+import { DEFAULT_GENERATOR_PARAMS, type GeneratorParams, type LoadedAssetPack } from '../../models/tilemap';
 import { useAppStore } from '../../store/useAppStore';
 import {
   Badge,
@@ -69,6 +73,7 @@ export function RightSidebar({
   map: MapRecord;
 }) {
   const selection = useAppStore((state) => state.selection);
+  const toolSettings = useAppStore((state) => state.toolSettings);
   const inspectorTab = useAppStore((state) => state.inspectorTab);
   const setInspectorTab = useAppStore((state) => state.setInspectorTab);
   const updateEntity = useAppStore((state) => state.updateEntity);
@@ -77,7 +82,10 @@ export function RightSidebar({
   const updateMapView = useAppStore((state) => state.updateMapView);
   const pairTransitions = useAppStore((state) => state.pairTransitions);
   const toggleLayer = useAppStore((state) => state.toggleLayer);
+  const toggleAssetFavorite = useAppStore((state) => state.toggleAssetFavorite);
   const setIconPickerOpen = useAppStore((state) => state.setIconPickerOpen);
+  const setActiveTool = useAppStore((state) => state.setActiveTool);
+  const setToolSettings = useAppStore((state) => state.setToolSettings);
   const restartOnboarding = useAppStore((state) => state.restartOnboarding);
   const seedTutorialLinkTarget = useAppStore((state) => state.seedTutorialLinkTarget);
   const generateDungeon = useAppStore((state) => state.generateDungeon);
@@ -89,6 +97,9 @@ export function RightSidebar({
     roomCountMax: DEFAULT_GENERATOR_PARAMS.roomCountMax,
     corridorWidth: DEFAULT_GENERATOR_PARAMS.corridorWidth,
   });
+  const [assetFamilyFilter, setAssetFamilyFilter] = useState<'all' | (typeof assetCatalog)[number]['family']>('all');
+  const [assetSearch, setAssetSearch] = useState('');
+  const [assetPack, setAssetPack] = useState<LoadedAssetPack | null>(null);
 
   const selectedId = selection.ids[0];
   const selectedRoom: FloorRoom | undefined =
@@ -97,6 +108,8 @@ export function RightSidebar({
     selection.kind === 'corridor' ? map.corridors.find((entry) => entry.id === selectedId) : undefined;
   const selectedMarker: MarkerRecord | undefined =
     selection.kind === 'marker' ? map.markers.find((entry) => entry.id === selectedId) : undefined;
+  const selectedProp: PropRecord | undefined =
+    selection.kind === 'prop' ? map.props.find((entry) => entry.id === selectedId) : undefined;
   const selectedTransition: TransitionRecord | undefined =
     selection.kind === 'transition' ? map.transitions.find((entry) => entry.id === selectedId) : undefined;
   const selectedDoorway: DoorwayRecord | undefined =
@@ -109,8 +122,38 @@ export function RightSidebar({
     selectedDoorway?.transitionId ? map.transitions.find((entry) => entry.id === selectedDoorway.transitionId) : undefined;
   const activeTransition = selectedTransition ?? linkedDoorTransition;
   const pairSuggestions = activeTransition ? findDoorPairSuggestions(project, activeTransition) : [];
+  const assetFamilies = ['all', ...new Set(assetCatalog.map((asset) => asset.family))] as const;
+  const assetResults = useMemo(() => {
+    const results = searchAssets(assetSearch, assetFamilyFilter === 'all' ? undefined : assetFamilyFilter);
+    return [...results].sort((a, b) => {
+      const aFav = project.assetFavorites.includes(a.id) ? 1 : 0;
+      const bFav = project.assetFavorites.includes(b.id) ? 1 : 0;
+      if (aFav !== bFav) return bFav - aFav;
+      return a.label.localeCompare(b.label);
+    });
+  }, [assetFamilyFilter, assetSearch, project.assetFavorites]);
+  const selectedAssetId =
+    selection.kind === 'prop'
+      ? selectedProp?.assetId
+      : selection.kind === 'doorway'
+        ? selectedDoorway?.doorStyleId
+        : undefined;
 
   const matchingIcons = useMemo(() => builtInIconLibrary.slice(0, 18), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAssetPack(map.view.assetPackId)
+      .then((pack) => {
+        if (!cancelled) setAssetPack(pack);
+      })
+      .catch(() => {
+        if (!cancelled) setAssetPack(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [map.view.assetPackId]);
 
   const onUploadBackground = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -128,13 +171,41 @@ export function RightSidebar({
     event.target.value = '';
   };
 
+  const armAssetPlacement = (assetId: string) => {
+    const asset = findAsset(assetId);
+    if (!asset) return;
+    if (asset.family === 'door' || asset.family === 'gate') {
+      setActiveTool('doorway');
+      setToolSettings({ doorStyleId: asset.id });
+      setInspectorTab('links');
+      return;
+    }
+    setActiveTool('prop');
+    setToolSettings({ propAssetId: asset.id });
+    setInspectorTab('assets');
+  };
+
+  const getAssetCompatibility = (assetId: string) => {
+    const asset = findAsset(assetId);
+    if (!asset) return { tileOk: false, threeOk: false };
+    const tileRole = getTileRoleForAsset(assetId, asset.states[0]?.state);
+    const tileOk = Boolean(assetPack && tileRole && getBestTileForRoleOrFallback(assetPack, tileRole));
+    const threeOk = Boolean(asset.prefab3d || asset.states.some((entry) => entry.prefab3d));
+    return { tileOk, threeOk };
+  };
+
   return (
     <aside className="right-sidebar" data-hotkey-scope="editor-form" data-testid="inspector-sidebar">
       <Panel>
         <div className="inspector-tabs" role="tablist" aria-label="Inspector tabs">
           {[
             ['selection', 'Selection'],
+            ['assets', 'Assets'],
             ['map', 'Map'],
+            ['layers', 'Layers'],
+            ['links', 'Links'],
+            ['notes', 'Notes'],
+            ['help', 'Help'],
           ].map(([value, label]) => (
             <button
               key={value}
@@ -146,34 +217,6 @@ export function RightSidebar({
               {label}
             </button>
           ))}
-          <details className={`menu-dropdown inspector-tabs__advanced ${
-            ['layers', 'links', 'notes', 'help'].includes(inspectorTab) ? 'is-active' : ''
-          }`}>
-            <summary className="menu-dropdown__trigger">
-              <span>Advanced</span>
-            </summary>
-            <div className="menu-dropdown__panel">
-              {[
-                ['layers', 'Layers'],
-                ['links', 'Links'],
-                ['notes', 'Notes'],
-                ['help', 'Help'],
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  className="menu-dropdown__item"
-                  onClick={(event) => {
-                    setInspectorTab(value as typeof inspectorTab);
-                    const details = event.currentTarget.closest('details');
-                    if (details instanceof HTMLDetailsElement) details.open = false;
-                  }}
-                  type="button"
-                >
-                  <span>{label}</span>
-                </button>
-              ))}
-            </div>
-          </details>
         </div>
       </Panel>
 
@@ -311,6 +354,17 @@ export function RightSidebar({
                       onChange={(event) => updateEntity('doorway', selectedDoorway.id, { doorwayState: event.target.value })}
                     />
                   </div>
+                  <SelectField
+                    label="Door Style"
+                    value={selectedDoorway.doorStyleId ?? ''}
+                    onChange={(event) => updateEntity('doorway', selectedDoorway.id, { doorStyleId: event.target.value })}
+                  >
+                    {assetCatalog
+                      .filter((asset) => asset.family === 'door' || asset.family === 'gate' || asset.family === 'stairs' || asset.family === 'ladder')
+                      .map((asset) => (
+                        <option key={asset.id} value={asset.id}>{asset.label}</option>
+                      ))}
+                  </SelectField>
                 </InspectorGroup>
               ) : null}
               {activeTransition ? (
@@ -437,12 +491,142 @@ export function RightSidebar({
             </Panel>
           ) : null}
 
-          {!selectedRoom && !selectedCorridor && !selectedDoorway && !selectedMarker && !selectedNote && !activeTransition && !selectedRoute ? (
+          {selectedProp ? (
+            <Panel>
+              <SectionTitle eyebrow="Selection" title={selectedProp.label || 'Prop'} />
+              <InspectorGroup title="Identity">
+                <TextField
+                  label="Label"
+                  value={selectedProp.label}
+                  onChange={(event) => updateEntity('prop', selectedProp.id, { label: event.target.value })}
+                />
+                <SelectField
+                  label="Asset"
+                  value={selectedProp.assetId}
+                  onChange={(event) => updateEntity('prop', selectedProp.id, { assetId: event.target.value })}
+                >
+                  {assetCatalog.map((asset) => (
+                    <option key={asset.id} value={asset.id}>{asset.label}</option>
+                  ))}
+                </SelectField>
+              </InspectorGroup>
+              <InspectorGroup title="Transform">
+                <div className="field-row">
+                  <SelectField
+                    label="Orientation"
+                    value={selectedProp.orientation ?? 'north'}
+                    onChange={(event) => updateEntity('prop', selectedProp.id, { orientation: event.target.value })}
+                  >
+                    <option value="north">North</option>
+                    <option value="east">East</option>
+                    <option value="south">South</option>
+                    <option value="west">West</option>
+                  </SelectField>
+                  <TextField
+                    label="Scale"
+                    type="number"
+                    value={String(selectedProp.scale)}
+                    onChange={(event) => updateEntity('prop', selectedProp.id, { scale: Number(event.target.value) || 1 })}
+                  />
+                  <TextField
+                    label="Rotation"
+                    type="number"
+                    value={String(selectedProp.rotationDeg)}
+                    onChange={(event) => updateEntity('prop', selectedProp.id, { rotationDeg: Number(event.target.value) || 0 })}
+                  />
+                </div>
+              </InspectorGroup>
+            </Panel>
+          ) : null}
+
+          {!selectedRoom && !selectedCorridor && !selectedDoorway && !selectedProp && !selectedMarker && !selectedNote && !activeTransition && !selectedRoute ? (
             <Panel>
               <EmptyState title="Nothing selected" subtitle="Pick a room, corridor, doorway, route, note, or marker to inspect it here." />
             </Panel>
           ) : null}
         </>
+      ) : null}
+
+      {inspectorTab === 'assets' ? (
+        <Panel>
+          <SectionTitle eyebrow="Assets" title="Asset Catalog" />
+          <div className="assets-panel">
+            <div className="assets-panel__sidebar">
+              {assetFamilies.map((family) => (
+                <button
+                  key={family}
+                  className={assetFamilyFilter === family ? 'is-active' : ''}
+                  onClick={() => setAssetFamilyFilter(family)}
+                  type="button"
+                >
+                  <span>{family === 'all' ? 'All Assets' : family.replace(/_/g, ' ')}</span>
+                  {family !== 'all' ? <small>{assetCatalog.filter((asset) => asset.family === family).length}</small> : null}
+                </button>
+              ))}
+            </div>
+            <div className="assets-panel__content">
+              <div className="field-row">
+                <TextField
+                  label="Search"
+                  value={assetSearch}
+                  onChange={(event) => setAssetSearch(event.target.value)}
+                />
+              </div>
+              <div className="assets-panel__summary">
+                <span>{assetResults.length} results</span>
+                <span>Favorites {project.assetFavorites.length}</span>
+                <span>Pack {map.view.assetPackId}</span>
+              </div>
+              <div className="suggestion-list assets-list">
+                {assetResults.map((asset) => {
+                  const favorite = project.assetFavorites.includes(asset.id);
+                  const compatibility = getAssetCompatibility(asset.id);
+                  const selected = selectedAssetId === asset.id || toolSettings.propAssetId === asset.id || toolSettings.doorStyleId === asset.id;
+                  return (
+                    <div
+                      key={asset.id}
+                      className={`suggestion-item assets-list__item ${selected ? 'is-active' : ''}`}
+                      onClick={() => armAssetPlacement(asset.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          armAssetPlacement(asset.id);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <div className="assets-list__item-main">
+                        <span className="assets-list__icon">
+                          <SvgMapIcon iconId={asset.defaultIconId} size={18} />
+                        </span>
+                        <div>
+                          <strong>{asset.label}</strong>
+                          <small>{asset.id}</small>
+                        </div>
+                      </div>
+                      <div className="assets-list__meta">
+                        <span className={`assets-compat ${compatibility.tileOk ? 'is-ok' : 'is-missing'}`}>tile</span>
+                        <span className={`assets-compat ${compatibility.threeOk ? 'is-ok' : 'is-missing'}`}>3d</span>
+                        <button
+                          aria-label={favorite ? `Remove ${asset.label} from favorites` : `Favorite ${asset.label}`}
+                          className={`assets-favorite ${favorite ? 'is-active' : ''}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleAssetFavorite(asset.id);
+                          }}
+                          type="button"
+                        >
+                          ★
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </Panel>
       ) : null}
 
       {inspectorTab === 'map' ? (
@@ -459,9 +643,11 @@ export function RightSidebar({
               </div>
             </InspectorGroup>
             <InspectorGroup title="View Defaults">
-              <SelectField label="Render Mode" value={map.view.renderMode} onChange={(event) => updateMapView({ renderMode: event.target.value as typeof map.view.renderMode })}>
-                <option value="editor_2d">2D Editor</option>
-                <option value="preview_3d">3D Preview</option>
+              <SelectField label="View Mode" value={map.view.viewMode} onChange={(event) => updateMapView({ viewMode: event.target.value as typeof map.view.viewMode })}>
+                <option value="plan_2d">Plan</option>
+                <option value="second_follow">Second</option>
+                <option value="third_orbit">Third</option>
+                <option value="first_walk">First</option>
               </SelectField>
               <div className="field-row">
                 <TextField
@@ -478,11 +664,31 @@ export function RightSidebar({
                 </SelectField>
               </div>
               <div className="field-row">
+                <SelectField label="Style Pack" value={map.view.stylePackId} onChange={(event) => updateMapView({ stylePackId: event.target.value as typeof map.view.stylePackId })}>
+                  <option value="stonekeep">Stonekeep</option>
+                  <option value="parchment">Parchment</option>
+                  <option value="pixel">Pixel</option>
+                  <option value="ink">Ink</option>
+                  <option value="battlemap">Battlemap</option>
+                </SelectField>
                 <SelectField label="Wall Style" value={map.view.wallStyle} onChange={(event) => updateMapView({ wallStyle: event.target.value as typeof map.view.wallStyle })}>
                   <option value="stone">Stone</option>
                   <option value="brick">Brick</option>
                   <option value="ruin">Ruin</option>
                 </SelectField>
+              </div>
+              <div className="field-row">
+                <SelectField label="3D Fog" value={map.view.fogMode3d} onChange={(event) => updateMapView({ fogMode3d: event.target.value as typeof map.view.fogMode3d })}>
+                  <option value="cone">Cone</option>
+                  <option value="radius">Radius</option>
+                </SelectField>
+                <SelectField label="Quality" value={map.view.quality3d ?? 'medium'} onChange={(event) => updateMapView({ quality3d: event.target.value as typeof map.view.quality3d })}>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </SelectField>
+              </div>
+              <div className="field-row">
                 <SelectField label="Lighting" value={map.view.lightPreset} onChange={(event) => updateMapView({ lightPreset: event.target.value as typeof map.view.lightPreset })}>
                   <option value="torch">Torch</option>
                   <option value="moonlit">Moonlit</option>
@@ -499,6 +705,7 @@ export function RightSidebar({
               <ToggleRow label="Snap to grid" checked={map.view.snapToGrid} onChange={(checked) => updateMapView({ snapToGrid: checked })} />
               <ToggleRow label="Show grid" checked={map.view.showGrid} onChange={(checked) => updateMapView({ showGrid: checked })} />
               <ToggleRow label="Show minimap" checked={map.view.showMinimap} onChange={(checked) => updateMapView({ showMinimap: checked })} />
+              <ToggleRow label="Show fog of knowledge" checked={map.view.showFogOfKnowledge} onChange={(checked) => updateMapView({ showFogOfKnowledge: checked })} />
               <ToggleRow label="Show tool hints" checked={map.view.showToolHints} onChange={(checked) => updateMapView({ showToolHints: checked })} />
               <ToggleRow label="Show door labels" checked={map.view.showDoorLabels} onChange={(checked) => updateMapView({ showDoorLabels: checked })} />
             </InspectorGroup>
@@ -671,10 +878,12 @@ export function RightSidebar({
         <Panel>
           <SectionTitle eyebrow="Help" title="Guided Tutorial and Shortcuts" />
           <div className="help-list">
-            <div><strong>1.</strong><p>`R` room, `C` corridor, `D` doorway, `N` note, `M` overlay, `P` route, `K` sketch, `Delete` erase selected.</p></div>
-            <div><strong>2.</strong><p>`1-6` swap modes, `Ctrl/Cmd+K` opens the command palette, `Ctrl/Cmd+D` duplicates the current selection.</p></div>
-            <div><strong>3.</strong><p>`G` toggles the grid, `F` toggles focus mode while the workspace view is focused, and the canvas controls provide persistent fit/reset buttons.</p></div>
-            <div><strong>4.</strong><p>Use the Links tab to pair doors across maps, then switch to Navigate mode to travel through them safely.</p></div>
+            {formatHotkeyHelp().map((group) => (
+              <div key={group.category}>
+                <strong>{group.category}</strong>
+                <p>{group.entries.map((entry) => `${entry.keys}: ${entry.action}`).join(' | ')}</p>
+              </div>
+            ))}
           </div>
           <div className="project-card__actions">
             <Button data-testid="restart-tutorial-button-sidebar" onClick={restartOnboarding}>Restart Tutorial</Button>

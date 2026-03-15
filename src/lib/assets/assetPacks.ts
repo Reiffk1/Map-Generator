@@ -4,6 +4,25 @@ import { generateProceduralAtlas } from './proceduralTileset';
 
 const packCache = new Map<string, LoadedAssetPack>();
 
+const roleFallbacks: Partial<Record<TileRole, TileRole[]>> = {
+  door_locked_ns: ['door_closed_ns'],
+  door_locked_ew: ['door_closed_ew'],
+  door_secret_ns: ['door_closed_ns'],
+  door_secret_ew: ['door_closed_ew'],
+  door_boss_ns: ['door_locked_ns', 'door_closed_ns'],
+  door_boss_ew: ['door_locked_ew', 'door_closed_ew'],
+  decor_crate: ['decor_chest', 'decor_barrel'],
+  decor_bookshelf: ['decor_table'],
+  decor_altar: ['decor_table', 'decor_pillar'],
+  decor_switch: ['decor_torch'],
+  decor_bed: ['decor_table'],
+  decor_fountain: ['decor_pillar'],
+  decor_statue: ['decor_pillar'],
+  decor_trap_plate: ['decor_rubble'],
+  fog_unseen: ['fog_seen', 'fog_visible'],
+  fog_seen: ['fog_visible'],
+};
+
 function buildRoleIndex(tiles: AssetPackManifest['tiles']): Map<TileRole, number[]> {
   const index = new Map<TileRole, number[]>();
   for (const tile of tiles) {
@@ -281,6 +300,18 @@ export function getCachedPack(packId: string): LoadedAssetPack | undefined {
 
 export function getTileIdsForRole(pack: LoadedAssetPack, role: TileRole): number[] {
   return pack.roleIndex.get(role) ?? [];
+}
+
+export function getBestTileForRoleOrFallback(
+  pack: LoadedAssetPack,
+  role: TileRole,
+): number | undefined {
+  const candidates = [role, ...(roleFallbacks[role] ?? []), 'floor_stone'] as TileRole[];
+  for (const candidate of candidates) {
+    const tileId = pack.roleIndex.get(candidate)?.[0];
+    if (tileId) return tileId;
+  }
+  return undefined;
 }
 
 export function getTileDefById(pack: LoadedAssetPack, tileId: number): AssetPackManifest['tiles'][number] | undefined {

@@ -1,4 +1,5 @@
 import type { ProjectRecord } from '../../models/types';
+import { getHotkeyLabel } from '../../lib/hotkeys';
 import { useAppStore } from '../../store/useAppStore';
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '../ui/command';
@@ -17,7 +18,7 @@ export function CommandPalette({ project }: { project: ProjectRecord }) {
   const generateDungeon = useAppStore((state) => state.generateDungeon);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
   const setInspectorTab = useAppStore((state) => state.setInspectorTab);
-  const updateMapView = useAppStore((state) => state.updateMapView);
+  const setViewMode = useAppStore((state) => state.setViewMode);
 
   const run = (fn: () => void) => () => {
     fn();
@@ -53,15 +54,25 @@ export function CommandPalette({ project }: { project: ProjectRecord }) {
             </CommandGroup>
 
             <CommandGroup heading="Tools">
-              <CommandItem onSelect={run(() => setActiveTool('floorRoom'))}>Equip room tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('corridor'))}>Equip corridor tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('doorway'))}>Equip doorway tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('marker'))}>Equip marker tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('note'))}>Equip note tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('wall'))}>Equip wall tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('route'))}>Equip route tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('sketch'))}>Equip sketch tool</CommandItem>
-              <CommandItem onSelect={run(() => setActiveTool('erase'))}>Equip erase tool</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('floorRoom'))}>Equip Room Tool [{getHotkeyLabel('tool_room')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('corridor'))}>Equip Corridor Tool [{getHotkeyLabel('tool_corridor')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('doorway'))}>Equip Door Tool [{getHotkeyLabel('tool_door')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('prop'))}>Equip Prop Tool [{getHotkeyLabel('tool_prop')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('marker'))}>Equip Marker Tool [{getHotkeyLabel('tool_marker')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('note'))}>Equip Note Tool [{getHotkeyLabel('tool_note')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('anchor'))}>Equip Anchor Tool [{getHotkeyLabel('tool_anchor')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('wall'))}>Equip Wall Tool [{getHotkeyLabel('tool_wall')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('route'))}>Equip Route Tool [{getHotkeyLabel('tool_route')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('sketch'))}>Equip Sketch Tool [{getHotkeyLabel('tool_sketch')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('erase'))}>Equip Erase Tool [{getHotkeyLabel('tool_erase')}]</CommandItem>
+              <CommandItem onSelect={run(() => setActiveTool('measure'))}>Equip Measure Tool [{getHotkeyLabel('tool_measure')}]</CommandItem>
+            </CommandGroup>
+
+            <CommandGroup heading="Views">
+              <CommandItem onSelect={run(() => setViewMode('plan_2d'))}>Switch to Plan (2D) [{getHotkeyLabel('view_plan')}]</CommandItem>
+              <CommandItem onSelect={run(() => setViewMode('second_follow'))}>Switch to Second (Follow) [{getHotkeyLabel('view_second')}]</CommandItem>
+              <CommandItem onSelect={run(() => setViewMode('third_orbit'))}>Switch to Third (Orbit) [{getHotkeyLabel('view_third')}]</CommandItem>
+              <CommandItem onSelect={run(() => setViewMode('first_walk'))}>Switch to First (Walk) [{getHotkeyLabel('view_first')}]</CommandItem>
             </CommandGroup>
 
             <CommandGroup heading="Actions">
@@ -71,21 +82,15 @@ export function CommandPalette({ project }: { project: ProjectRecord }) {
                 clearActiveMap();
               })}>Clear current map</CommandItem>
               <CommandItem onSelect={run(generateDungeon)}>Generate Dungeon</CommandItem>
-              <CommandItem onSelect={run(() => {
-                const s = useAppStore.getState();
-                const m = s.workspace.projects
-                  .find((p) => p.id === s.workspace.activeProjectId)
-                  ?.maps.find((e) => e.id === s.workspace.activeMapId);
-                updateMapView({ renderMode: m?.view.renderMode === 'preview_3d' ? 'editor_2d' : 'preview_3d' });
-              })}>Toggle 3D preview mode</CommandItem>
-              <CommandItem onSelect={run(() => toggleSidebar('left'))}>Toggle explorer sidebar</CommandItem>
-              <CommandItem onSelect={run(() => toggleSidebar('right'))}>Toggle inspector sidebar</CommandItem>
-              <CommandItem onSelect={run(() => toggleSidebar('bottom'))}>Toggle bottom drawer</CommandItem>
+              <CommandItem onSelect={run(() => toggleSidebar('left'))}>Toggle Explorer [{getHotkeyLabel('toggle_explorer')}]</CommandItem>
+              <CommandItem onSelect={run(() => toggleSidebar('right'))}>Toggle Inspector [{getHotkeyLabel('toggle_inspector')}]</CommandItem>
+              <CommandItem onSelect={run(() => toggleSidebar('bottom'))}>Toggle Drawer [{getHotkeyLabel('toggle_drawer')}]</CommandItem>
               <CommandItem onSelect={run(restartOnboarding)}>Restart guided tutorial</CommandItem>
             </CommandGroup>
 
             <CommandGroup heading="Inspector">
               <CommandItem onSelect={run(() => setInspectorTab('selection'))}>Open inspector: Selection</CommandItem>
+              <CommandItem onSelect={run(() => setInspectorTab('assets'))}>Open inspector: Assets</CommandItem>
               <CommandItem onSelect={run(() => setInspectorTab('map'))}>Open inspector: Map</CommandItem>
               <CommandItem onSelect={run(() => setInspectorTab('layers'))}>Open inspector: Layers</CommandItem>
               <CommandItem onSelect={run(() => setInspectorTab('links'))}>Open inspector: Links</CommandItem>

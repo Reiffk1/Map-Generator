@@ -55,7 +55,7 @@ const rectContainsPoint = (bounds: Bounds, point: Point) =>
   point.y >= bounds.y &&
   point.y <= bounds.y + bounds.height;
 
-const cleanFootprint = (rects: Bounds[]) => {
+export const cleanFootprint = (rects: Bounds[]) => {
   const unique = new Map<string, Bounds>();
 
   for (const rect of rects) {
@@ -121,6 +121,113 @@ const cleanFootprint = (rects: Bounds[]) => {
 
 export const getRoomFootprint = (room: Pick<FloorRoom, 'bounds' | 'footprint'>): Bounds[] =>
   cleanFootprint(room.footprint?.length ? room.footprint : [room.bounds]);
+
+export const roomContainsPoint = (room: Pick<FloorRoom, 'bounds' | 'footprint'>, point: Point) =>
+  getRoomFootprint(room).some((rect) => rectContainsPoint(rect, point));
+
+const cellKey = (gx: number, gy: number) => `${gx}:${gy}`;
+
+const parseCellKey = (key: string) => {
+  const [gx, gy] = key.split(':').map(Number);
+  return { gx, gy };
+};
+
+export const getLargestContiguousCellComponent = (cells: Iterable<string>) => {
+  const pending = new Set(cells);
+  let best: string[] = [];
+
+  while (pending.size > 0) {
+    const seed = pending.values().next().value as string;
+    pending.delete(seed);
+    const queue = [seed];
+    const component = [seed];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const { gx, gy } = parseCellKey(current);
+      const neighbors = [
+        cellKey(gx + 1, gy),
+        cellKey(gx - 1, gy),
+        cellKey(gx, gy + 1),
+        cellKey(gx, gy - 1),
+      ];
+      for (const neighbor of neighbors) {
+        if (!pending.has(neighbor)) continue;
+        pending.delete(neighbor);
+        queue.push(neighbor);
+        component.push(neighbor);
+      }
+    }
+
+    if (component.length > best.length) {
+      best = component;
+    }
+  }
+
+  return new Set(best);
+};
+
+export const compressCellsToFootprint = (cells: Iterable<string>, gridSize: number): Bounds[] => {
+  const rows = new Map<number, Array<{ start: number; end: number }>>();
+  for (const key of cells) {
+    const { gx, gy } = parseCellKey(key);
+    const current = rows.get(gy) ?? [];
+    current.push({ start: gx, end: gx + 1 });
+    rows.set(gy, current);
+  }
+
+  const yValues = [...rows.keys()].sort((left, right) => left - right);
+  const active = new Map<string, Bounds>();
+  const finished: Bounds[] = [];
+
+  for (const gy of yValues) {
+    const runs = (rows.get(gy) ?? []).sort((left, right) => left.start - right.start);
+    const mergedRuns: Array<{ start: number; end: number }> = [];
+    for (const run of runs) {
+      const last = mergedRuns[mergedRuns.length - 1];
+      if (!last || run.start > last.end) {
+        mergedRuns.push({ ...run });
+        continue;
+      }
+      last.end = Math.max(last.end, run.end);
+    }
+
+    const nextActive = new Map<string, Bounds>();
+    for (const run of mergedRuns) {
+      const key = `${run.start}:${run.end}`;
+      const existing = active.get(key);
+      if (existing) {
+        nextActive.set(key, {
+          ...existing,
+          height: existing.height + gridSize,
+        });
+        active.delete(key);
+        continue;
+      }
+
+      nextActive.set(key, {
+        x: run.start * gridSize,
+        y: gy * gridSize,
+        width: (run.end - run.start) * gridSize,
+        height: gridSize,
+      });
+    }
+
+    for (const leftover of active.values()) {
+      finished.push(leftover);
+    }
+    active.clear();
+    for (const [key, value] of nextActive.entries()) {
+      active.set(key, value);
+    }
+  }
+
+  for (const leftover of active.values()) {
+    finished.push(leftover);
+  }
+
+  return cleanFootprint(finished);
+};
 
 export const getBoundsForFootprint = (footprint: Bounds[]): Bounds => {
   const rects = cleanFootprint(footprint);
