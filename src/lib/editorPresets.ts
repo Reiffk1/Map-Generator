@@ -32,6 +32,7 @@ export const corridorWidthOptions: Array<{ value: number; label: string; detail:
 
 export const transitionOptions: Array<{ value: TransitionType; label: string; iconId: string; color: string }> = [
   { value: 'door', label: 'Door', iconId: 'door', color: '#c53c48' },
+  { value: 'portcullis', label: 'Portcullis', iconId: 'portcullis', color: '#b1775d' },
   { value: 'gate', label: 'Gate', iconId: 'gate', color: '#c46a52' },
   { value: 'stairs_up', label: 'Stairs Up', iconId: 'stairs-up', color: '#c56a49' },
   { value: 'stairs_down', label: 'Stairs Down', iconId: 'stairs-down', color: '#a9443c' },
@@ -68,6 +69,16 @@ export const markerPresetOptions: Array<{
     markerState: 'default',
     state: 'seen',
     tags: ['loot'],
+  },
+  {
+    value: 'chest',
+    label: 'Chest',
+    iconId: 'chest',
+    color: '#d09d46',
+    markerType: 'chest',
+    markerState: 'default',
+    state: 'seen',
+    tags: ['loot', 'chest'],
   },
   {
     value: 'secret',

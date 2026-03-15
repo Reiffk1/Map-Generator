@@ -2,14 +2,24 @@ import { create } from 'zustand';
 
 import { createBlankProject, createDefaultLayers, createDefaultView, createWorkspaceFromProject, sampleProject } from '../data/sampleProject';
 import { defaultToolSettings, describeRoomPlacement, getMarkerPresetDefinition, getRoomTypeDefinition, getTransitionDefinition } from '../lib/editorPresets';
-import { attachCorridorToFloorplan, buildRoomWalls, rebuildGeneratedWalls, snapDoorwayToFloorplan } from '../lib/floorplan';
+import {
+  attachCorridorToFloorplan,
+  buildRoomWalls,
+  getRoomBounds,
+  getRoomFootprint,
+  moveRoomTo,
+  normalizeFloorRoom,
+  rebuildGeneratedWalls,
+  replaceRoomFootprint,
+  snapDoorwayToFloorplan,
+} from '../lib/floorplan';
 import { loadStoredWorkspace, saveStoredWorkspace } from '../lib/persistence';
 import { tutorialSteps, type TutorialTrigger } from '../lib/tutorial';
 import { generateDungeon as runGenerator } from '../lib/generation/generateDungeon';
 import { createEmptyTileGrid } from '../models/tilemap';
 import { carveFloorRect, carveFloorBrush, generateWallsFromFloor, placeDoors } from '../lib/tilemap/walls';
 import { autotileWallLayer, autotileFloorVariation, STANDARD_WALL_IDS, STANDARD_FLOOR_IDS } from '../lib/tilemap/autotile';
-import { deepClone, makeId } from '../lib/utils';
+import { deepClone, distanceBetween, makeId } from '../lib/utils';
 import type {
   AnchorRecord,
   Bounds,
@@ -151,27 +161,30 @@ const getActiveMap = (workspace: WorkspaceState) => {
 const getLayerId = (map: MapRecord, type: LayerRecord['type']) =>
   map.layers.find((layer) => layer.type === type)?.id ?? map.layers[0]?.id ?? '';
 
-const toLegacyRoom = (room: FloorRoom): MapRecord['rooms'][number] => ({
-  kind: 'room',
-  id: `${room.id}_legacy`,
-  layerId: room.layerId,
-  label: room.label,
-  subtitle: room.subtitle,
-  color: '#352327',
-  tags: [...room.tags],
-  state: room.state,
-  noteIds: [...room.noteIds],
-  createdAt: room.createdAt,
-  updatedAt: room.updatedAt,
-  position: { x: room.bounds.x, y: room.bounds.y },
-  size: { width: room.bounds.width, height: room.bounds.height },
-  shape: 'rectangle',
-  description: '',
-  dangerLevel: room.dangerLevel,
-  lootCount: room.lootCount,
-  checklist: [...room.checklist],
-  template: room.roomType === 'loot' ? 'loot_room' : room.roomType === 'safe' ? 'safe_room' : room.roomType === 'puzzle' ? 'puzzle_room' : room.roomType === 'secret' ? 'hidden_room' : 'hallway',
-});
+const toLegacyRoom = (room: FloorRoom): MapRecord['rooms'][number] => {
+  const bounds = getRoomBounds(room);
+  return {
+    kind: 'room',
+    id: `${room.id}_legacy`,
+    layerId: room.layerId,
+    label: room.label,
+    subtitle: room.subtitle,
+    color: '#352327',
+    tags: [...room.tags],
+    state: room.state,
+    noteIds: [...room.noteIds],
+    createdAt: room.createdAt,
+    updatedAt: room.updatedAt,
+    position: { x: bounds.x, y: bounds.y },
+    size: { width: bounds.width, height: bounds.height },
+    shape: 'rectangle',
+    description: '',
+    dangerLevel: room.dangerLevel,
+    lootCount: room.lootCount,
+    checklist: [...room.checklist],
+    template: room.roomType === 'loot' ? 'loot_room' : room.roomType === 'safe' ? 'safe_room' : room.roomType === 'puzzle' ? 'puzzle_room' : room.roomType === 'secret' ? 'hidden_room' : 'hallway',
+  };
+};
 
 const toLegacyPath = (corridor: CorridorSegment): PathConnection => ({
   id: `${corridor.id}_legacy`,
@@ -240,26 +253,28 @@ const bumpOnboarding = (state: AppStore, trigger: TutorialTrigger): Partial<AppS
   };
 };
 
-const roomFromLegacy = (map: MapRecord, room: MapRecord['rooms'][number]): FloorRoom => ({
-  kind: 'floor_room',
-  id: room.id.replace(/_legacy$/, ''),
-  layerId: getLayerId(map, 'rooms'),
-  label: room.label,
-  subtitle: room.subtitle,
-  color: '#efe5d4',
-  tags: [...room.tags],
-  state: room.state,
-  noteIds: [...room.noteIds],
-  createdAt: room.createdAt,
-  updatedAt: room.updatedAt,
-  bounds: { x: room.position.x, y: room.position.y, width: room.size.width, height: room.size.height },
-  roomShape: room.shape === 'circle' ? 'circle' : 'rectangle',
-  roomType: room.template === 'loot_room' ? 'loot' : room.template === 'safe_room' ? 'safe' : room.template === 'puzzle_room' ? 'puzzle' : room.template === 'hidden_room' ? 'secret' : 'hall',
-  fillPattern: 'ash',
-  dangerLevel: room.dangerLevel,
-  lootCount: room.lootCount,
-  checklist: [...room.checklist],
-});
+const roomFromLegacy = (map: MapRecord, room: MapRecord['rooms'][number]): FloorRoom =>
+  normalizeFloorRoom({
+    kind: 'floor_room',
+    id: room.id.replace(/_legacy$/, ''),
+    layerId: getLayerId(map, 'rooms'),
+    label: room.label,
+    subtitle: room.subtitle,
+    color: '#efe5d4',
+    tags: [...room.tags],
+    state: room.state,
+    noteIds: [...room.noteIds],
+    createdAt: room.createdAt,
+    updatedAt: room.updatedAt,
+    bounds: { x: room.position.x, y: room.position.y, width: room.size.width, height: room.size.height },
+    footprint: [{ x: room.position.x, y: room.position.y, width: room.size.width, height: room.size.height }],
+    roomShape: room.shape === 'circle' ? 'circle' : 'rectangle',
+    roomType: room.template === 'loot_room' ? 'loot' : room.template === 'safe_room' ? 'safe' : room.template === 'puzzle_room' ? 'puzzle' : room.template === 'hidden_room' ? 'secret' : 'hall',
+    fillPattern: 'ash',
+    dangerLevel: room.dangerLevel,
+    lootCount: room.lootCount,
+    checklist: [...room.checklist],
+  });
 
 const corridorFromLegacy = (map: MapRecord, path: PathConnection): CorridorSegment => ({
   id: path.id.replace(/_legacy$/, ''),
@@ -307,6 +322,7 @@ const syncDoorwaysToTileGrid = (map: MapRecord) => {
 };
 
 const syncMap = (map: MapRecord) => {
+  map.floorRooms = map.floorRooms.map(normalizeFloorRoom);
   map.corridors = map.corridors.map((corridor) => {
     const attached = attachCorridorToFloorplan(map, corridor.points);
     return {
@@ -327,10 +343,19 @@ const syncMap = (map: MapRecord) => {
   map.doorways = map.doorways.map((doorway) => {
     const transition = doorway.transitionId ? map.transitions.find((entry) => entry.id === doorway.transitionId) : undefined;
     const nextPosition = transition?.position ?? doorway.position;
+    const attachedRoom = doorway.attachedRoomId
+      ? map.floorRooms.find((room) => room.id === doorway.attachedRoomId)
+      : undefined;
+    const preferredSnap = attachedRoom
+      ? snapDoorwayToFloorplan(nextPosition, map, { preferredRoomId: attachedRoom.id })
+      : undefined;
     const shouldResnap =
       doorway.attachedRoomId === undefined ||
-      !map.floorRooms.some((room) => room.id === doorway.attachedRoomId);
-    const snapped = shouldResnap ? snapDoorwayToFloorplan(nextPosition, map) : undefined;
+      !attachedRoom ||
+      (preferredSnap?.attachedRoomId === attachedRoom.id && distanceBetween(nextPosition, preferredSnap.position) > 8);
+    const snapped = shouldResnap
+      ? preferredSnap ?? snapDoorwayToFloorplan(nextPosition, map)
+      : undefined;
 
     if (transition && snapped) {
       transition.position = snapped.position;
@@ -364,7 +389,6 @@ const syncMap = (map: MapRecord) => {
     map.wallSegments,
     getLayerId(map, 'rooms'),
     map.doorways,
-    map.corridors,
   );
   syncDoorwaysToTileGrid(map);
 };
@@ -392,7 +416,9 @@ const normalizeMap = (source: MapRecord): MapRecord => {
   map.view.renderStyle2d = map.view.renderStyle2d === 'vector' || map.view.renderStyle2d === 'tile' ? map.view.renderStyle2d : 'tile';
   map.view.assetPackId = map.view.assetPackId || 'default-pixel';
   map.style = map.style === 'graph' || map.style === 'hybrid' || map.style === 'floorplan' ? map.style : 'floorplan';
-  map.floorRooms = map.floorRooms?.length ? map.floorRooms : (map.rooms ?? []).map((room) => roomFromLegacy(map, room));
+  map.floorRooms = map.floorRooms?.length
+    ? map.floorRooms.map(normalizeFloorRoom)
+    : (map.rooms ?? []).map((room) => roomFromLegacy(map, room));
   map.corridors = map.corridors?.length ? map.corridors : (map.paths ?? []).map((path) => corridorFromLegacy(map, path));
   map.wallSegments = map.wallSegments ?? [];
   map.doorways = map.doorways ?? [];
@@ -892,7 +918,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const { roomPlacement, roomType } = get().toolSettings;
     const roomDefinition = getRoomTypeDefinition(roomType);
     applyWorkspaceChange(set, get, (_workspace, _project, map) => {
-      const room: FloorRoom = {
+      const room = normalizeFloorRoom({
         kind: 'floor_room',
         id: makeId('floor_room'),
         layerId: getLayerId(map, 'rooms'),
@@ -905,32 +931,33 @@ export const useAppStore = create<AppStore>((set, get) => ({
         createdAt: now(),
         updatedAt: now(),
         bounds,
+        footprint: [bounds],
         roomShape: roomPlacement === 'stamp' ? 'octagon' : 'rectangle',
         roomType,
         fillPattern: roomType === 'boss' ? 'bloodline' : roomType === 'secret' ? 'ruin' : 'ash',
         dangerLevel: roomType === 'boss' ? 4 : roomType === 'secret' ? 2 : 1,
         lootCount: roomType === 'loot' ? 1 : 0,
         checklist: [],
-      };
-      const overlapping = map.floorRooms.filter((existing) => boundsOverlap(existing.bounds, bounds));
+      });
+      const overlapping = map.floorRooms.filter((existing) =>
+        getRoomFootprint(existing).some((rect) => boundsOverlap(rect, bounds)),
+      );
       if (overlapping.length > 0) {
         const primary = overlapping[0]!;
-        const allBounds = [...overlapping.map((r) => r.bounds), bounds];
-        const minX = Math.min(...allBounds.map((b) => b.x));
-        const minY = Math.min(...allBounds.map((b) => b.y));
-        const maxX = Math.max(...allBounds.map((b) => b.x + b.width));
-        const maxY = Math.max(...allBounds.map((b) => b.y + b.height));
-        primary.bounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        const merged = replaceRoomFootprint(primary, [...overlapping.flatMap(getRoomFootprint), bounds]);
+        primary.bounds = merged.bounds;
+        primary.footprint = merged.footprint;
+        primary.roomShape = merged.roomShape;
         primary.tags = [...new Set([...primary.tags, ...room.tags, ...overlapping.flatMap((r) => r.tags)])];
         primary.noteIds = [...new Set([...primary.noteIds, ...room.noteIds, ...overlapping.flatMap((r) => r.noteIds)])];
         primary.lootCount += room.lootCount;
         primary.updatedAt = now();
         const removeIds = new Set(overlapping.slice(1).map((r) => r.id));
         map.floorRooms = map.floorRooms.filter((r) => !removeIds.has(r.id));
-        set({ selection: { kind: 'floor_room', ids: [primary.id] } });
+        set({ selection: { kind: 'floor_room', ids: [primary.id] }, inspectorTab: 'selection' });
       } else {
         map.floorRooms.push(room);
-        set({ selection: { kind: 'floor_room', ids: [room.id] } });
+        set({ selection: { kind: 'floor_room', ids: [room.id] }, inspectorTab: 'selection' });
       }
 
       ensureTileGrid(map);
@@ -979,7 +1006,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       autotileFloorVariation(map.tileGrid!, STANDARD_FLOOR_IDS, map.corridors.length);
 
       syncMap(map);
-      set({ selection: { kind: 'corridor', ids: [entry.id] } });
+      set({ selection: { kind: 'corridor', ids: [entry.id] }, inspectorTab: 'selection' });
     });
     set((state) => bumpOnboarding(state, 'corridor-drawn') ?? {});
   },
@@ -998,7 +1025,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         updatedAt: now(),
       };
       map.wallSegments.push(wall);
-      set({ selection: { kind: 'wall', ids: [wall.id] } });
+      set({ selection: { kind: 'wall', ids: [wall.id] }, inspectorTab: 'selection' });
     }),
   addDoorwayAt: (position, orientation = 'south', attachedRoomId) => {
     const transitionPreset = getTransitionDefinition(get().toolSettings.transitionType);
@@ -1074,7 +1101,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         badges: preset.markerState === 'secret' ? ['secret'] : [],
       };
       map.markers.push(entry);
-      set({ selection: { kind: 'marker', ids: [entry.id] } });
+      set({ selection: { kind: 'marker', ids: [entry.id] }, inspectorTab: 'selection' });
     });
     set((state) => bumpOnboarding(state, 'annotation-added') ?? {});
   },
@@ -1100,7 +1127,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         updatedAt: now(),
       };
       map.notesBoard.push(entry);
-      set({ selection: { kind: 'note', ids: [entry.id] } });
+      set({ selection: { kind: 'note', ids: [entry.id] }, inspectorTab: 'selection' });
     });
     set((state) => bumpOnboarding(state, 'annotation-added') ?? {});
   },
@@ -1115,7 +1142,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         mapId: map.id,
       };
       map.anchors.push(entry);
-      set({ selection: { kind: 'anchor', ids: [entry.id] } });
+      set({ selection: { kind: 'anchor', ids: [entry.id] }, inspectorTab: 'selection' });
     }),
   addRouteOverlay: (points) =>
     applyWorkspaceChange(set, get, (_workspace, _project, map) => {
@@ -1134,7 +1161,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         updatedAt: now(),
       };
       map.routeOverlays.push(entry);
-      set({ selection: { kind: 'route', ids: [entry.id] } });
+      set({ selection: { kind: 'route', ids: [entry.id] }, inspectorTab: 'selection' });
     }),
   addSketchStroke: (points) =>
     applyWorkspaceChange(set, get, (_workspace, _project, map) => {
@@ -1150,7 +1177,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
   updateEntity: (kind, id, patch) =>
     applyWorkspaceChange(set, get, (_workspace, _project, map) => {
       const stamp = now();
-      if (kind === 'floor_room') map.floorRooms = map.floorRooms.map((entry) => entry.id === id ? { ...entry, ...patch, updatedAt: stamp } : entry);
+      if (kind === 'floor_room') {
+        map.floorRooms = map.floorRooms.map((entry) => {
+          if (entry.id !== id) return entry;
+          const nextBounds = patch.bounds ? (patch.bounds as Bounds) : entry.bounds;
+          const nextFootprint = Array.isArray(patch.footprint)
+            ? (patch.footprint as Bounds[])
+            : patch.bounds
+              ? [nextBounds]
+              : entry.footprint;
+          return normalizeFloorRoom({
+            ...entry,
+            ...patch,
+            bounds: nextBounds,
+            footprint: nextFootprint,
+            updatedAt: stamp,
+          });
+        });
+      }
       else if (kind === 'corridor') map.corridors = map.corridors.map((entry) => entry.id === id ? { ...entry, ...patch, updatedAt: stamp } : entry);
       else if (kind === 'wall') map.wallSegments = map.wallSegments.map((entry) => entry.id === id ? { ...entry, ...patch, updatedAt: stamp } : entry);
       else if (kind === 'doorway') {
@@ -1199,7 +1243,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   moveEntity: (kind, id, position) =>
     applyWorkspaceChange(set, get, (_workspace, _project, map) => {
       if (kind === 'floor_room') {
-        map.floorRooms = map.floorRooms.map((entry) => entry.id === id ? { ...entry, bounds: { ...entry.bounds, x: position.x, y: position.y }, updatedAt: now() } : entry);
+        map.floorRooms = map.floorRooms.map((entry) =>
+          entry.id === id ? { ...moveRoomTo(entry, position), updatedAt: now() } : entry,
+        );
       } else if (kind === 'marker') {
         map.markers = map.markers.map((entry) => entry.id === id ? { ...entry, position, updatedAt: now() } : entry);
       } else if (kind === 'note') {
@@ -1209,7 +1255,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       } else if (kind === 'transition') {
         map.transitions = map.transitions.map((entry) => entry.id === id ? { ...entry, position, updatedAt: now() } : entry);
       } else if (kind === 'doorway') {
-        const snapped = snapDoorwayToFloorplan(position, map);
+        const currentDoorway = map.doorways.find((entry) => entry.id === id);
+        const snapped = snapDoorwayToFloorplan(position, map, { preferredRoomId: currentDoorway?.attachedRoomId });
         map.doorways = map.doorways.map((entry) =>
           entry.id === id
             ? {
@@ -1257,21 +1304,27 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (selection.kind === 'floor_room') {
         const item = map.floorRooms.find((entry) => entry.id === id);
         if (!item) return;
-        const clone = { ...deepClone(item), id: makeId('floor_room'), label: `${item.label} Copy`, bounds: { ...item.bounds, x: item.bounds.x + 72, y: item.bounds.y + 72 }, createdAt: now(), updatedAt: now() };
+        const clone = {
+          ...moveRoomTo(deepClone(item), { x: getRoomBounds(item).x + 72, y: getRoomBounds(item).y + 72 }),
+          id: makeId('floor_room'),
+          label: `${item.label} Copy`,
+          createdAt: now(),
+          updatedAt: now(),
+        };
         map.floorRooms.push(clone);
-        set({ selection: { kind: 'floor_room', ids: [clone.id] } });
+        set({ selection: { kind: 'floor_room', ids: [clone.id] }, inspectorTab: 'selection' });
       } else if (selection.kind === 'marker') {
         const item = map.markers.find((entry) => entry.id === id);
         if (!item) return;
         const clone = { ...deepClone(item), id: makeId('marker'), label: `${item.label} Copy`, position: { x: item.position.x + 36, y: item.position.y + 36 }, createdAt: now(), updatedAt: now() };
         map.markers.push(clone);
-        set({ selection: { kind: 'marker', ids: [clone.id] } });
+        set({ selection: { kind: 'marker', ids: [clone.id] }, inspectorTab: 'selection' });
       } else if (selection.kind === 'note') {
         const item = map.notesBoard.find((entry) => entry.id === id);
         if (!item) return;
         const clone = { ...deepClone(item), id: makeId('note'), title: `${item.title} Copy`, position: { x: item.position.x + 36, y: item.position.y + 36 }, createdAt: now(), updatedAt: now() };
         map.notesBoard.push(clone);
-        set({ selection: { kind: 'note', ids: [clone.id] } });
+        set({ selection: { kind: 'note', ids: [clone.id] }, inspectorTab: 'selection' });
       }
       syncMap(map);
     }),
@@ -1370,6 +1423,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           createdAt: now(),
           updatedAt: now(),
           bounds: { x: 720, y: 520, width: 420, height: 280 },
+          footprint: [{ x: 720, y: 520, width: 420, height: 280 }],
           roomShape: 'rectangle',
           roomType: 'junction',
           fillPattern: 'ash',
@@ -1518,6 +1572,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
           width: room.tileW * output.tileGrid.tileSizePx,
           height: room.tileH * output.tileGrid.tileSizePx,
         },
+        footprint: [{
+          x: room.tileX * output.tileGrid.tileSizePx,
+          y: room.tileY * output.tileGrid.tileSizePx,
+          width: room.tileW * output.tileGrid.tileSizePx,
+          height: room.tileH * output.tileGrid.tileSizePx,
+        }],
         roomShape: 'rectangle' as const,
         roomType: (room.roomType ?? 'chamber') as FloorRoom['roomType'],
         fillPattern: 'stone' as const,
@@ -1596,3 +1656,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
 export const selectActiveProject = (state: AppStore) => getActiveProject(state.workspace);
 export const selectActiveMap = (state: AppStore) => getActiveMap(state.workspace);
+
+declare global {
+  interface Window {
+    __WAYFINDER_DEBUG__?: {
+      store: typeof useAppStore;
+      selectActiveMap: () => MapRecord;
+      selectActiveProject: () => ProjectRecord;
+    };
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.__WAYFINDER_DEBUG__ = {
+    store: useAppStore,
+    selectActiveMap: () => selectActiveMap(useAppStore.getState()),
+    selectActiveProject: () => selectActiveProject(useAppStore.getState()),
+  };
+}

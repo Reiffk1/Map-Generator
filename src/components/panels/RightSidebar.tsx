@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type ChangeEvent, type PropsWithChildren } from 'react';
 
 import { SvgMapIcon, builtInIconLibrary } from '../../data/iconLibrary';
+import { getRoomBounds, roomHasIrregularFootprint } from '../../lib/floorplan';
 import { findDoorPairSuggestions } from '../../lib/pathfinding';
 import { makeId } from '../../lib/utils';
 import type {
@@ -179,71 +180,87 @@ export function RightSidebar({
       {inspectorTab === 'selection' ? (
         <>
           {selectedRoom ? (
-            <Panel>
-              <SectionTitle eyebrow="Selection" title={selectedRoom.label} />
-              <InspectorGroup title="Identity">
-                <TextField
-                  data-testid="selection-room-label"
-                  label="Room Name"
-                  value={selectedRoom.label}
-                  onChange={(event) => updateEntity('floor_room', selectedRoom.id, { label: event.target.value })}
-                />
-                <TextField
-                  label="Subtitle"
-                  value={selectedRoom.subtitle ?? ''}
-                  onChange={(event) => updateEntity('floor_room', selectedRoom.id, { subtitle: event.target.value })}
-                />
-                <SelectField
-                  label="Room Type"
-                  value={selectedRoom.roomType}
-                  onChange={(event) => updateEntity('floor_room', selectedRoom.id, { roomType: event.target.value })}
-                >
-                  {['hall', 'chamber', 'junction', 'loot', 'secret', 'safe', 'stairs', 'boss'].map((value) => (
-                    <option key={value} value={value}>{value}</option>
-                  ))}
-                </SelectField>
-              </InspectorGroup>
-              <InspectorGroup title="Geometry">
-                <div className="field-row">
-                  <TextField
-                    label="Width"
-                    type="number"
-                    value={String(selectedRoom.bounds.width)}
-                    onChange={(event) =>
-                      updateEntity('floor_room', selectedRoom.id, {
-                        bounds: { ...selectedRoom.bounds, width: Number(event.target.value) || selectedRoom.bounds.width },
-                      })
-                    }
-                  />
-                  <TextField
-                    label="Height"
-                    type="number"
-                    value={String(selectedRoom.bounds.height)}
-                    onChange={(event) =>
-                      updateEntity('floor_room', selectedRoom.id, {
-                        bounds: { ...selectedRoom.bounds, height: Number(event.target.value) || selectedRoom.bounds.height },
-                      })
-                    }
-                  />
-                </div>
-              </InspectorGroup>
-              <InspectorGroup title="State">
-                <div className="field-row">
-                  <TextField
-                    label="Danger"
-                    type="number"
-                    value={String(selectedRoom.dangerLevel)}
-                    onChange={(event) => updateEntity('floor_room', selectedRoom.id, { dangerLevel: Number(event.target.value) || 0 })}
-                  />
-                  <TextField
-                    label="Loot"
-                    type="number"
-                    value={String(selectedRoom.lootCount)}
-                    onChange={(event) => updateEntity('floor_room', selectedRoom.id, { lootCount: Number(event.target.value) || 0 })}
-                  />
-                </div>
-              </InspectorGroup>
-            </Panel>
+            (() => {
+              const roomBounds = getRoomBounds(selectedRoom);
+              const irregularRoom = roomHasIrregularFootprint(selectedRoom);
+              return (
+                <Panel>
+                  <SectionTitle eyebrow="Selection" title={selectedRoom.label} />
+                  <InspectorGroup title="Identity">
+                    <TextField
+                      data-testid="selection-room-label"
+                      label="Room Name"
+                      value={selectedRoom.label}
+                      onChange={(event) => updateEntity('floor_room', selectedRoom.id, { label: event.target.value })}
+                    />
+                    <TextField
+                      label="Subtitle"
+                      value={selectedRoom.subtitle ?? ''}
+                      onChange={(event) => updateEntity('floor_room', selectedRoom.id, { subtitle: event.target.value })}
+                    />
+                    <SelectField
+                      label="Room Type"
+                      value={selectedRoom.roomType}
+                      onChange={(event) => updateEntity('floor_room', selectedRoom.id, { roomType: event.target.value })}
+                    >
+                      {['hall', 'chamber', 'junction', 'loot', 'secret', 'safe', 'stairs', 'boss'].map((value) => (
+                        <option key={value} value={value}>{value}</option>
+                      ))}
+                    </SelectField>
+                  </InspectorGroup>
+                  <InspectorGroup title="Geometry">
+                    {irregularRoom ? (
+                      <>
+                        <TextField label="Bounding Width" type="number" value={String(roomBounds.width)} disabled />
+                        <TextField label="Bounding Height" type="number" value={String(roomBounds.height)} disabled />
+                        <p className="inspector-note">
+                          This room uses a compound footprint. Resize it from the canvas by extending or reshaping the room rather than editing a single box.
+                        </p>
+                      </>
+                    ) : (
+                      <div className="field-row">
+                        <TextField
+                          label="Width"
+                          type="number"
+                          value={String(roomBounds.width)}
+                          onChange={(event) =>
+                            updateEntity('floor_room', selectedRoom.id, {
+                              bounds: { ...roomBounds, width: Number(event.target.value) || roomBounds.width },
+                            })
+                          }
+                        />
+                        <TextField
+                          label="Height"
+                          type="number"
+                          value={String(roomBounds.height)}
+                          onChange={(event) =>
+                            updateEntity('floor_room', selectedRoom.id, {
+                              bounds: { ...roomBounds, height: Number(event.target.value) || roomBounds.height },
+                            })
+                          }
+                        />
+                      </div>
+                    )}
+                  </InspectorGroup>
+                  <InspectorGroup title="State">
+                    <div className="field-row">
+                      <TextField
+                        label="Danger"
+                        type="number"
+                        value={String(selectedRoom.dangerLevel)}
+                        onChange={(event) => updateEntity('floor_room', selectedRoom.id, { dangerLevel: Number(event.target.value) || 0 })}
+                      />
+                      <TextField
+                        label="Loot"
+                        type="number"
+                        value={String(selectedRoom.lootCount)}
+                        onChange={(event) => updateEntity('floor_room', selectedRoom.id, { lootCount: Number(event.target.value) || 0 })}
+                      />
+                    </div>
+                  </InspectorGroup>
+                </Panel>
+              );
+            })()
           ) : null}
 
           {selectedCorridor ? (

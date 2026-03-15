@@ -106,6 +106,11 @@ export const builtInIconLibrary: CartographyIconDefinition[] = [
     { kind: 'path', d: 'M6 19V8.5C6 6 8.2 4 11 4h2c2.8 0 5 2 5 4.5V19', stroke: 'ink', strokeWidth: baseStroke },
     { kind: 'poly', points: [9, 8, 9, 19, 12, 8, 12, 19, 15, 8, 15, 19], stroke: 'accent', fill: 'none', strokeWidth: 1.5 },
   ]),
+  createIcon('portcullis', 'Portcullis', 'Traversal', ['gate', 'bars', 'grate'], [
+    { kind: 'path', d: 'M5.5 19V8.5C5.5 6 7.9 4 10.9 4h2.2c3 0 5.4 2 5.4 4.5V19', stroke: 'ink', strokeWidth: baseStroke },
+    { kind: 'poly', points: [8.2, 8.2, 8.2, 18.2, 11.2, 8.2, 11.2, 18.2, 14.2, 8.2, 14.2, 18.2, 17.2, 8.2, 17.2, 18.2], stroke: 'accent', fill: 'none', strokeWidth: 1.35 },
+    { kind: 'poly', points: [8.2, 18.2, 9.1, 20, 10, 18.2, 11.2, 18.2, 12.1, 20, 13, 18.2, 14.2, 18.2, 15.1, 20, 16, 18.2, 17.2, 18.2], stroke: 'accent', fill: 'none', strokeWidth: 1.1 },
+  ]),
   createIcon('stairs-up', 'Stairs Up', 'Traversal', ['ascend', 'floor'], [
     { kind: 'poly', points: [5, 18, 10, 18, 10, 14, 14, 14, 14, 10, 18.5, 10], stroke: 'ink', fill: 'none', strokeWidth: baseStroke },
     { kind: 'poly', points: [12, 6.5, 12, 14, 9.5, 9.5, 12, 6.5, 14.5, 9.5], stroke: 'accent', fill: 'none', strokeWidth: 1.75 },

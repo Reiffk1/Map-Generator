@@ -14,7 +14,14 @@ import useImage from 'use-image';
 
 import { builtInIconLibrary, type IconPalette, type IconPrimitive } from '../../data/iconLibrary';
 import { TileCanvasLayer } from './TileCanvasLayer';
-import { getGeneratedRoomWallRoomId, getMapContentBounds, snapDoorwayToFloorplan } from '../../lib/floorplan';
+import {
+  getGeneratedRoomWallRoomId,
+  getMapContentBounds,
+  getRoomBounds,
+  getRoomFootprint,
+  roomHasIrregularFootprint,
+  snapDoorwayToFloorplan,
+} from '../../lib/floorplan';
 import { clamp } from '../../lib/utils';
 import type {
   MapRecord,
@@ -111,6 +118,7 @@ const doorwayRotation: Record<string, number> = {
 
 const transitionIcon: Record<TransitionRecord['transitionType'], string> = {
   door: 'door',
+  portcullis: 'portcullis',
   stairs_up: 'stairs-up',
   stairs_down: 'stairs-down',
   ladder: 'ladder',
@@ -371,25 +379,27 @@ const MiniNavigator = ({ map }: { map: MapRecord }) => {
             opacity={0.58}
           />
         ))}
-        {map.floorRooms.map((room) => (
-          <rect
-            key={room.id}
-            x={room.bounds.x}
-            y={room.bounds.y}
-            width={room.bounds.width}
-            height={room.bounds.height}
-            rx={26}
-            fill={room.color}
-            opacity={0.92}
-          />
-        ))}
+        {map.floorRooms.flatMap((room) =>
+          getRoomFootprint(room).map((rect, index) => (
+            <rect
+              key={`${room.id}_${index}`}
+              x={rect.x}
+              y={rect.y}
+              width={rect.width}
+              height={rect.height}
+              rx={18}
+              fill={room.color}
+              opacity={0.92}
+            />
+          )),
+        )}
       </svg>
     </div>
   );
 };
 
-export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; map: MapRecord }>(
-  function MapCanvas({ map }, ref) {
+export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; map: MapRecord; embedded?: boolean }>(
+  function MapCanvas({ map, embedded = false }, ref) {
     const stageRef = useRef<Konva.Stage | null>(null);
     const grainRef = useRef<Konva.Rect | null>(null);
     const fittedMapsRef = useRef<Set<string>>(new Set());
@@ -505,7 +515,11 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
       };
       for (const id of ids) {
         const room = map.floorRooms.find((r) => r.id === id);
-        if (room) { expand(room.bounds.x, room.bounds.y, room.bounds.width, room.bounds.height); continue; }
+        if (room) {
+          const bounds = getRoomBounds(room);
+          expand(bounds.x, bounds.y, bounds.width, bounds.height);
+          continue;
+        }
         const corridor = map.corridors.find((c) => c.id === id);
         if (corridor) { for (const p of corridor.points) expand(p.x - corridor.width, p.y - corridor.width, corridor.width * 2, corridor.width * 2); continue; }
         const door = map.doorways.find((d) => d.id === id);
@@ -662,7 +676,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
         return;
       }
 
-      if (editorMode === 'navigate' && options?.destinationMapId) {
+      if (editorMode === 'navigate' && activeTool === 'select' && options?.destinationMapId) {
         openMap(options.destinationMapId, { anchorId: options.destinationAnchorId, highlightedTransitionId: id });
         return;
       }
@@ -821,13 +835,15 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           ? 'Click specific segments and primitives to remove them.'
           : 'Click any object (or room wall) to remove the whole entity.';
       }
-      if (editorMode === 'navigate') return 'Use linked doorway hotspots to jump between maps.';
+      if (editorMode === 'navigate' && activeTool === 'select') return 'Use linked doorway hotspots to jump between maps.';
       return 'Select, pan, inspect, and annotate the active floorplan.';
     }, [activeTool, editorMode, toolSettings.eraseMode, toolSettings.roomPlacement]);
 
-    const showHotspots = activeTool === 'select' || editorMode === 'navigate';
+    const showHotspots = activeTool === 'select';
     const surfaceStyle = surfacePalette[map.view.floorSurfaceStyle];
     const wallTone = wallPalette[map.view.wallStyle];
+    const selectedRoomIds = new Set(selection.kind === 'floor_room' ? selection.ids : []);
+    const tileRenderMode = map.view.renderStyle2d === 'tile' && !!map.tileGrid;
 
     const doorwayStroke = (doorway: MapRecord['doorways'][number], isSelected: boolean) => {
       if (isSelected) return selectionStroke;
@@ -844,7 +860,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
     };
 
     return (
-      <div className="canvas-shell" data-testid="map-canvas" ref={containerRef}>
+      <div className={`canvas-shell${embedded ? ' canvas-shell--embedded' : ''}`} data-testid="map-canvas" ref={containerRef}>
         <Stage
           ref={stageRef}
           width={size.width}
@@ -953,52 +969,75 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                   const isSelected = selection.kind === 'corridor' && selection.ids.includes(corridor.id);
                   const isTileMode = map.view.renderStyle2d === 'tile' && !!map.tileGrid;
                   return (
-                  <Group key={corridor.id} onClick={handleEntitySelection('corridor', corridor.id)} opacity={isTileMode && !isSelected ? 0.12 : 1}>
-                    {isSelected ? (
-                      <Line
-                        points={corridor.points.flatMap((point) => [point.x, point.y])}
-                        stroke={selectionStroke}
-                        strokeWidth={corridor.width + 28}
-                        lineCap="round"
-                        lineJoin="round"
-                        opacity={0.22}
-                      />
-                    ) : null}
-                    <Line
-                      points={corridor.points.flatMap((point) => [point.x, point.y])}
-                      stroke={wallTone}
-                      strokeWidth={corridor.width + 28}
-                      lineCap="round"
-                      lineJoin="round"
-                      opacity={1}
-                    />
-                    <Line
-                      points={corridor.points.flatMap((point) => [point.x, point.y])}
-                      stroke={surfaceStyle.corridorEdge}
-                      strokeWidth={corridor.width + 14}
-                      lineCap="round"
-                      lineJoin="round"
-                      opacity={0.85}
-                    />
-                    <Line
-                      points={corridor.points.flatMap((point) => [point.x, point.y])}
-                      stroke={surfaceStyle.corridorFill}
-                      strokeWidth={Math.max(16, corridor.width - 6)}
-                      lineCap="round"
-                      lineJoin="round"
-                      fillPatternImage={skinCorridorTexture ?? corridorPatternImage}
-                      fillPatternRepeat="repeat"
-                      opacity={entityOpacity(corridor.state)}
-                    />
-                    <Line
-                      points={corridor.points.flatMap((point) => [point.x, point.y])}
-                      stroke={surfaceStyle.corridorCenter}
-                      strokeWidth={2}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                  </Group>
-                );
+                    <Group key={corridor.id} onClick={handleEntitySelection('corridor', corridor.id)}>
+                      {isSelected ? (
+                        <Line
+                          points={corridor.points.flatMap((point) => [point.x, point.y])}
+                          stroke={selectionStroke}
+                          strokeWidth={isTileMode ? corridor.width + 10 : corridor.width + 28}
+                          lineCap="round"
+                          lineJoin="round"
+                          opacity={isTileMode ? 0.26 : 0.22}
+                        />
+                      ) : null}
+                      {isTileMode ? (
+                        <>
+                          <Line
+                            points={corridor.points.flatMap((point) => [point.x, point.y])}
+                            stroke="rgba(12, 8, 6, 0.48)"
+                            strokeWidth={corridor.width + 6}
+                            lineCap="round"
+                            lineJoin="round"
+                            opacity={isSelected ? 0.34 : 0.12}
+                          />
+                          <Line
+                            points={corridor.points.flatMap((point) => [point.x, point.y])}
+                            stroke={isSelected ? '#f4ddad' : 'rgba(255, 244, 220, 0.22)'}
+                            strokeWidth={Math.max(2, corridor.width * 0.08)}
+                            lineCap="round"
+                            lineJoin="round"
+                            opacity={isSelected ? 0.72 : 0.42}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <Line
+                            points={corridor.points.flatMap((point) => [point.x, point.y])}
+                            stroke={wallTone}
+                            strokeWidth={corridor.width + 28}
+                            lineCap="round"
+                            lineJoin="round"
+                            opacity={1}
+                          />
+                          <Line
+                            points={corridor.points.flatMap((point) => [point.x, point.y])}
+                            stroke={surfaceStyle.corridorEdge}
+                            strokeWidth={corridor.width + 14}
+                            lineCap="round"
+                            lineJoin="round"
+                            opacity={0.85}
+                          />
+                          <Line
+                            points={corridor.points.flatMap((point) => [point.x, point.y])}
+                            stroke={surfaceStyle.corridorFill}
+                            strokeWidth={Math.max(16, corridor.width - 6)}
+                            lineCap="round"
+                            lineJoin="round"
+                            fillPatternImage={skinCorridorTexture ?? corridorPatternImage}
+                            fillPatternRepeat="repeat"
+                            opacity={entityOpacity(corridor.state)}
+                          />
+                          <Line
+                            points={corridor.points.flatMap((point) => [point.x, point.y])}
+                            stroke={surfaceStyle.corridorCenter}
+                            strokeWidth={2}
+                            lineCap="round"
+                            lineJoin="round"
+                          />
+                        </>
+                      )}
+                    </Group>
+                  );
                 })
               : null}
 
@@ -1006,53 +1045,68 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
               ? map.floorRooms.map((room) => {
                   const isSelected = selection.kind === 'floor_room' && selection.ids.includes(room.id);
                   const isTileMode = map.view.renderStyle2d === 'tile' && !!map.tileGrid;
+                  const bounds = getRoomBounds(room);
+                  const footprint = getRoomFootprint(room);
+                  const compound = roomHasIrregularFootprint(room);
                   return (
                     <Group
-                      draggable={editorMode !== 'navigate' && activeTool === 'select'}
+                      draggable={activeTool === 'select'}
                       key={room.id}
                       onClick={handleEntitySelection('floor_room', room.id)}
                       onDragStart={handOffRightButtonDragToStage}
                       onDragEnd={finishEntityDrag('floor_room', room.id)}
-                      x={room.bounds.x}
-                      y={room.bounds.y}
-                      opacity={isTileMode ? (isSelected ? 0.6 : 0.15) : 1}
+                      x={bounds.x}
+                      y={bounds.y}
+                      opacity={isTileMode ? (isSelected ? 0.44 : 0.16) : 1}
                     >
-                      {!isTileMode ? (
-                        <>
-                          <Rect
-                            width={room.bounds.width}
-                            height={room.bounds.height}
-                            cornerRadius={room.roomShape === 'octagon' ? 36 : 24}
-                            fillPatternImage={skinRoomTexture ?? roomPatternImage}
-                            fillPatternRepeat="repeat"
-                            fill={surfaceStyle.roomBase}
-                            stroke={isSelected ? selectionStroke : wallTone}
-                            strokeWidth={isSelected ? 6 : 7}
-                            shadowBlur={isSelected ? 30 : 24}
-                            shadowColor="rgba(0,0,0,0.55)"
-                            opacity={entityOpacity(room.state)}
-                          />
-                          <Rect
-                            x={8}
-                            y={8}
-                            width={room.bounds.width - 16}
-                            height={room.bounds.height - 16}
-                            cornerRadius={room.roomShape === 'octagon' ? 30 : 18}
-                            fill={room.color}
-                            opacity={0.15}
-                          />
-                        </>
-                      ) : null}
-                      <Rect
-                        x={isTileMode ? 0 : 8}
-                        y={isTileMode ? 0 : 8}
-                        width={isTileMode ? room.bounds.width : room.bounds.width - 16}
-                        height={isTileMode ? room.bounds.height : room.bounds.height - 16}
-                        cornerRadius={room.roomShape === 'octagon' ? 30 : 18}
-                        stroke={isSelected ? selectionStroke : (isTileMode ? 'rgba(255,255,255,0.2)' : surfaceStyle.roomInset)}
-                        strokeWidth={isSelected ? 3 : 1.5}
-                        opacity={isTileMode ? 1 : 0.4}
-                      />
+                      {footprint.map((rect, index) => {
+                        const localX = rect.x - bounds.x;
+                        const localY = rect.y - bounds.y;
+                        const cornerRadius =
+                          room.roomShape === 'octagon' && footprint.length === 1 ? 36 : compound ? 16 : 24;
+                        return (
+                          <Group key={`${room.id}_footprint_${index}`}>
+                            {!isTileMode ? (
+                              <>
+                                <Rect
+                                  x={localX}
+                                  y={localY}
+                                  width={rect.width}
+                                  height={rect.height}
+                                  cornerRadius={cornerRadius}
+                                  fillPatternImage={skinRoomTexture ?? roomPatternImage}
+                                  fillPatternRepeat="repeat"
+                                  fill={surfaceStyle.roomBase}
+                                  shadowBlur={compound ? 0 : isSelected ? 22 : 18}
+                                  shadowColor="rgba(0,0,0,0.5)"
+                                  opacity={entityOpacity(room.state)}
+                                />
+                                <Rect
+                                  x={localX + 8}
+                                  y={localY + 8}
+                                  width={Math.max(0, rect.width - 16)}
+                                  height={Math.max(0, rect.height - 16)}
+                                  cornerRadius={Math.max(10, cornerRadius - 6)}
+                                  fill={room.color}
+                                  opacity={0.15}
+                                />
+                              </>
+                            ) : null}
+                            {(!compound || isTileMode) && rect.width > 24 && rect.height > 24 ? (
+                              <Rect
+                                x={localX + (isTileMode ? 0 : 8)}
+                                y={localY + (isTileMode ? 0 : 8)}
+                                width={isTileMode ? rect.width : Math.max(0, rect.width - 16)}
+                                height={isTileMode ? rect.height : Math.max(0, rect.height - 16)}
+                                cornerRadius={Math.max(10, cornerRadius - (isTileMode ? 6 : 8))}
+                                stroke={isSelected ? selectionStroke : (isTileMode ? 'rgba(255,255,255,0.18)' : surfaceStyle.roomInset)}
+                                strokeWidth={isSelected ? 3 : 1.5}
+                                opacity={isTileMode ? 0.92 : 0.36}
+                              />
+                            ) : null}
+                          </Group>
+                        );
+                      })}
                       <Text x={18} y={16} text={room.label} fontFamily="Space Grotesk" fontSize={22} fontStyle="700" fill={isTileMode ? '#ffffff' : surfaceStyle.label} />
                       {room.subtitle ? (
                         <Text x={18} y={46} text={room.subtitle} fontFamily="Inter Tight" fontSize={13} fill={isTileMode ? '#cccccc' : surfaceStyle.labelMuted} />
@@ -1063,42 +1117,46 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
               : null}
 
             {layerVisibleForPreset(map, 'rooms')
-              ? map.wallSegments.map((wall) => (
-                  <Group key={wall.id}>
-                    <Line
-                      points={wall.points.flatMap((point) => [point.x, point.y])}
-                      stroke="rgba(0,0,0,0.35)"
-                      strokeWidth={wall.thickness * 1.5 + 4}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                    <Line
-                      points={wall.points.flatMap((point) => [point.x, point.y])}
-                      stroke={wallTone}
-                      strokeWidth={wall.thickness * 1.5}
-                      lineCap="round"
-                      lineJoin="round"
-                      onClick={() => {
-                        if (activeTool !== 'erase') return;
-                        if (toolSettings.eraseMode === 'entity') {
-                          const roomId = getGeneratedRoomWallRoomId(wall, map.floorRooms.map((room) => room.id));
-                          if (roomId && map.floorRooms.some((room) => room.id === roomId)) {
-                            deleteEntity('floor_room', roomId);
-                            return;
+              ? map.wallSegments.map((wall) => {
+                  const generatedRoomId = getGeneratedRoomWallRoomId(wall, map.floorRooms.map((room) => room.id));
+                  const highlightsSelectedRoom = generatedRoomId ? selectedRoomIds.has(generatedRoomId) : false;
+                  return (
+                    <Group key={wall.id}>
+                      <Line
+                        points={wall.points.flatMap((point) => [point.x, point.y])}
+                        stroke={highlightsSelectedRoom ? 'rgba(185,149,86,0.22)' : 'rgba(0,0,0,0.35)'}
+                        strokeWidth={wall.thickness * 1.5 + 4}
+                        lineCap="round"
+                        lineJoin="round"
+                      />
+                      <Line
+                        points={wall.points.flatMap((point) => [point.x, point.y])}
+                        stroke={highlightsSelectedRoom ? selectionStroke : wallTone}
+                        strokeWidth={wall.thickness * 1.5}
+                        lineCap="round"
+                        lineJoin="round"
+                        onClick={() => {
+                          if (activeTool !== 'erase') return;
+                          if (toolSettings.eraseMode === 'entity') {
+                            const roomId = getGeneratedRoomWallRoomId(wall, map.floorRooms.map((room) => room.id));
+                            if (roomId && map.floorRooms.some((room) => room.id === roomId)) {
+                              deleteEntity('floor_room', roomId);
+                              return;
+                            }
                           }
-                        }
-                        deleteEntity('wall', wall.id);
-                      }}
-                    />
-                    <Line
-                      points={wall.points.flatMap((point) => [point.x, point.y])}
-                      stroke={surfaceStyle.wallHighlight}
-                      strokeWidth={Math.max(2, wall.thickness * 0.24)}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                  </Group>
-                ))
+                          deleteEntity('wall', wall.id);
+                        }}
+                      />
+                      <Line
+                        points={wall.points.flatMap((point) => [point.x, point.y])}
+                        stroke={highlightsSelectedRoom ? 'rgba(255, 230, 180, 0.35)' : surfaceStyle.wallHighlight}
+                        strokeWidth={Math.max(2, wall.thickness * 0.24)}
+                        lineCap="round"
+                        lineJoin="round"
+                      />
+                    </Group>
+                  );
+                })
               : null}
           </Layer>
 
@@ -1112,7 +1170,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                   const badgeOffset = transitionBadgeOffset[doorway.orientation];
                   return (
                     <Group
-                      draggable={editorMode !== 'navigate' && activeTool === 'select'}
+                      draggable={activeTool === 'select'}
                       key={doorway.id}
                       onClick={handleEntitySelection('doorway', doorway.id, {
                         destinationMapId: linked?.destinationMapId,
@@ -1155,7 +1213,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
                               strokeWidth={1.3}
                             />
                           </>
-                        ) : doorway.transitionType === 'gate' ? (
+                        ) : doorway.transitionType === 'gate' || doorway.transitionType === 'portcullis' ? (
                           <Line
                             points={[-12, -8, -12, 8, 0, -8, 0, 8, 12, -8, 12, 8]}
                             stroke={stroke}
@@ -1263,7 +1321,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
             {layerVisibleForPreset(map, 'icons')
               ? map.markers.map((entry) => (
                   <Group
-                    draggable={editorMode !== 'navigate' && activeTool === 'select'}
+                    draggable={activeTool === 'select'}
                     key={entry.id}
                     onClick={handleEntitySelection('marker', entry.id)}
                     onDragStart={handOffRightButtonDragToStage}
@@ -1287,7 +1345,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
             {layerVisibleForPreset(map, 'notes')
               ? map.notesBoard.map((entry) => (
                   <Group
-                    draggable={editorMode !== 'navigate' && activeTool === 'select'}
+                    draggable={activeTool === 'select'}
                     key={entry.id}
                     onClick={handleEntitySelection('note', entry.id)}
                     onDragStart={handOffRightButtonDragToStage}
@@ -1314,7 +1372,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
             {layerVisibleForPreset(map, 'labels')
               ? map.anchors.map((entry) => (
                   <Group
-                    draggable={editorMode !== 'navigate' && activeTool === 'select'}
+                    draggable={activeTool === 'select'}
                     key={entry.id}
                     onClick={handleEntitySelection('anchor', entry.id)}
                     onDragStart={handOffRightButtonDragToStage}
@@ -1344,22 +1402,53 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
               <>
                 {draftKind === 'corridor' ? (
                   <>
-                    <Line
-                      points={draftPath.flatMap((point) => [point.x, point.y])}
-                      stroke={wallTone}
-                      strokeWidth={toolSettings.corridorWidth + 18}
-                      opacity={0.55}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                    <Line
-                      points={draftPath.flatMap((point) => [point.x, point.y])}
-                      stroke={surfaceStyle.corridorFill}
-                      strokeWidth={Math.max(16, toolSettings.corridorWidth - 10)}
-                      opacity={0.78}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
+                    {tileRenderMode ? (
+                      <>
+                        <Line
+                          points={draftPath.flatMap((point) => [point.x, point.y])}
+                          stroke={selectionStroke}
+                          strokeWidth={toolSettings.corridorWidth + 10}
+                          opacity={0.26}
+                          lineCap="round"
+                          lineJoin="round"
+                        />
+                        <Line
+                          points={draftPath.flatMap((point) => [point.x, point.y])}
+                          stroke="rgba(12, 8, 6, 0.44)"
+                          strokeWidth={toolSettings.corridorWidth + 6}
+                          opacity={0.24}
+                          lineCap="round"
+                          lineJoin="round"
+                        />
+                        <Line
+                          points={draftPath.flatMap((point) => [point.x, point.y])}
+                          stroke="#f4ddad"
+                          strokeWidth={Math.max(2, toolSettings.corridorWidth * 0.08)}
+                          opacity={0.72}
+                          lineCap="round"
+                          lineJoin="round"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Line
+                          points={draftPath.flatMap((point) => [point.x, point.y])}
+                          stroke={wallTone}
+                          strokeWidth={toolSettings.corridorWidth + 18}
+                          opacity={0.55}
+                          lineCap="round"
+                          lineJoin="round"
+                        />
+                        <Line
+                          points={draftPath.flatMap((point) => [point.x, point.y])}
+                          stroke={surfaceStyle.corridorFill}
+                          strokeWidth={Math.max(16, toolSettings.corridorWidth - 10)}
+                          opacity={0.78}
+                          lineCap="round"
+                          lineJoin="round"
+                        />
+                      </>
+                    )}
                   </>
                 ) : (
                   <Line
@@ -1403,14 +1492,14 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           </Layer>
         </Stage>
 
-        {map.view.showToolHints ? (
+        {map.view.showToolHints && !embedded ? (
           <div className="canvas-hint-overlay">
             <span className="section-eyebrow">Tool Hint</span>
             <strong>{currentHint}</strong>
           </div>
         ) : null}
 
-        <div className="canvas-controls-overlay">
+        <div className={`canvas-controls-overlay${embedded ? ' canvas-controls-overlay--embedded' : ''}`}>
           <button aria-label="Zoom out canvas" data-testid="zoom-out-button" onClick={() => applyZoom(clamp(map.view.zoom / 1.12, 0.32, 3))} type="button">-</button>
           <button aria-label="Zoom in canvas" data-testid="zoom-in-button" onClick={() => applyZoom(clamp(map.view.zoom * 1.12, 0.32, 3))} type="button">+</button>
           <button aria-label="Fit map to canvas" data-testid="fit-map-button" onClick={() => fitToMap()} type="button">Fit to Map</button>
@@ -1472,7 +1561,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, { project: ProjectRecord; m
           </div>
         ) : null}
 
-        {map.view.showMinimap ? <MiniNavigator map={map} /> : null}
+        {map.view.showMinimap && !embedded ? <MiniNavigator map={map} /> : null}
       </div>
     );
   },

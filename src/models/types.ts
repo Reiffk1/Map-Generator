@@ -63,6 +63,7 @@ export type TransitionState =
 
 export type TransitionType =
   | 'door'
+  | 'portcullis'
   | 'stairs_up'
   | 'stairs_down'
   | 'ladder'
@@ -121,7 +122,7 @@ export type FloorRoomType =
 
 export type RoomPlacementMode = 'rectangle' | 'stamp';
 
-export type MarkerPlacementPreset = 'hazard' | 'loot' | 'secret' | 'save' | 'npc';
+export type MarkerPlacementPreset = 'hazard' | 'loot' | 'chest' | 'secret' | 'save' | 'npc';
 
 export type DoorwayOrientation = 'north' | 'south' | 'east' | 'west';
 
@@ -262,6 +263,7 @@ export interface FloorRoom extends EntityBase {
   kind: 'floor_room';
   subtitle?: string;
   bounds: Bounds;
+  footprint: Bounds[];
   roomShape: FloorRoomShape;
   roomType: FloorRoomType;
   fillPattern: 'stone' | 'ash' | 'bloodline' | 'ruin';

@@ -74,6 +74,7 @@ const floorRoom = (mapId: string, input: Partial<FloorRoom> & Pick<FloorRoom, 'i
   createdAt: input.createdAt ?? now(),
   updatedAt: input.updatedAt ?? now(),
   subtitle: input.subtitle,
+  footprint: input.footprint ?? [input.bounds],
   roomShape: input.roomShape ?? 'rectangle',
   roomType: input.roomType ?? 'chamber',
   fillPattern: input.fillPattern ?? 'ash',

@@ -293,11 +293,15 @@ img { display: block; max-width: 100%; }
 .canvas-shell {
   @apply relative overflow-hidden min-h-0 h-full rounded-3xl border border-[var(--line)] bg-[#1a1614] shadow-[var(--shadow)];
 }
+.canvas-shell--embedded {
+  @apply rounded-[22px];
+  min-height: 320px;
+}
 .canvas-shell--3d {
   @apply bg-[#0a0a0b] border-[rgba(196,60,76,0.25)];
 }
 .workspace-canvas-region {
-  @apply relative min-h-0 h-full;
+  @apply relative min-h-0 h-full overflow-hidden;
 }
 .workspace-canvas-region:focus {
   outline: none;
@@ -348,6 +352,29 @@ img { display: block; max-width: 100%; }
   max-width: 280px;
 }
 
+.preview-workbench {
+  @apply grid gap-2.5 min-h-0 h-full;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.9fr);
+}
+.preview-workbench > .canvas-shell--3d {
+  min-height: 0;
+}
+.preview-workbench__editor {
+  @apply flex flex-col gap-2.5 min-h-0;
+}
+.preview-workbench__editor-header {
+  @apply grid gap-1 px-3.5 py-3 rounded-2xl border border-[var(--line)] bg-[rgba(20,18,18,0.88)];
+}
+.preview-workbench__editor-header strong {
+  font-family: 'Space Grotesk', sans-serif;
+}
+.preview-workbench__editor-header span {
+  @apply text-[var(--text-muted)] text-[0.82rem];
+}
+.preview-workbench__editor .canvas-shell {
+  @apply flex-1 min-h-0;
+}
+
 .focus-mode-overlay {
   @apply absolute top-3 right-3 z-[4] flex gap-2 flex-wrap p-2 rounded-2xl;
   background: rgba(10, 10, 11, 0.78);
@@ -362,6 +389,9 @@ img { display: block; max-width: 100%; }
 
 .canvas-controls-overlay {
   @apply absolute right-3.5 top-[80px] flex gap-2;
+}
+.canvas-controls-overlay--embedded {
+  @apply top-3 right-3 flex-wrap;
 }
 .canvas-controls-overlay button {
   @apply inline-flex items-center justify-center gap-2 px-3.5 py-2.5 text-[var(--text)] rounded-xl cursor-pointer border border-[rgba(255,200,200,0.07)] bg-[#221c1c] transition-all duration-150;
@@ -385,7 +415,23 @@ img { display: block; max-width: 100%; }
 /* ─── Sidebars ─── */
 
 .left-sidebar, .right-sidebar {
-  @apply flex flex-col gap-2.5 overflow-y-auto overflow-x-hidden min-h-0 h-full;
+  @apply flex flex-col gap-2.5 overflow-y-auto min-h-0 h-full;
+  position: relative;
+  z-index: 3;
+}
+
+.left-sidebar,
+.right-sidebar,
+.tool-rail-vertical,
+.map-tabs {
+  scrollbar-width: none;
+}
+.left-sidebar::-webkit-scrollbar,
+.right-sidebar::-webkit-scrollbar,
+.tool-rail-vertical::-webkit-scrollbar,
+.map-tabs::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 /* ─── Bottom panel ─── */
@@ -502,12 +548,41 @@ img { display: block; max-width: 100%; }
 
 .inspector-tabs {
   @apply grid gap-2;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: start;
 }
 .inspector-tabs button {
   @apply px-2.5 py-2.5 text-[var(--text)] rounded-xl cursor-pointer border border-[rgba(255,200,200,0.07)] bg-[#221c1c] transition-all duration-150;
+  min-width: 0;
 }
 .inspector-tabs button:hover { @apply -translate-y-px border-[var(--line-strong)] bg-[#2c2424]; }
+.inspector-tabs__advanced {
+  @apply relative min-w-0;
+}
+.menu-dropdown summary {
+  list-style: none;
+}
+.menu-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+.menu-dropdown__trigger {
+  @apply flex items-center justify-center gap-2 px-2.5 py-2.5 rounded-xl border border-[rgba(255,200,200,0.07)] bg-[#221c1c] cursor-pointer text-[var(--text)] transition-all duration-150;
+}
+.menu-dropdown__trigger:hover,
+.menu-dropdown[open] .menu-dropdown__trigger {
+  @apply -translate-y-px border-[var(--line-strong)] bg-[#2c2424];
+}
+.menu-dropdown__panel {
+  @apply absolute right-0 top-[calc(100%+8px)] grid gap-1 p-2 rounded-2xl border border-[var(--line-strong)] bg-[var(--panel-strong)] shadow-[var(--shadow)];
+  min-width: 180px;
+  z-index: 6;
+}
+.menu-dropdown__item {
+  @apply flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl cursor-pointer text-left text-[var(--text)] bg-transparent transition-all duration-150;
+}
+.menu-dropdown__item:hover {
+  @apply bg-[#2c2424];
+}
 
 .inspector-group {
   @apply border border-[rgba(255,200,200,0.05)] rounded-2xl bg-[rgba(255,200,200,0.02)];
@@ -516,6 +591,7 @@ img { display: block; max-width: 100%; }
 .inspector-group summary { @apply cursor-pointer list-none px-4 py-3.5; font-family: 'Space Grotesk', sans-serif; }
 .inspector-group summary::-webkit-details-marker { display: none; }
 .inspector-group__body { @apply px-4 pb-4 grid gap-3; }
+.inspector-note { @apply m-0 text-[var(--text-muted)] leading-relaxed; }
 
 .toggle-row { @apply flex justify-between items-center py-2.5 text-[var(--text-muted)]; }
 .toggle-row input { accent-color: var(--crimson); }
@@ -669,5 +745,8 @@ img { display: block; max-width: 100%; }
   }
   .focus-mode-overlay {
     @apply left-3 right-3 top-3;
+  }
+  .preview-workbench {
+    grid-template-columns: 1fr;
   }
 }

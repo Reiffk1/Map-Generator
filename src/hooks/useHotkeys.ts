@@ -68,13 +68,14 @@ export const useHotkeys = () => {
 
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
+      const map = selectActiveMap(useAppStore.getState());
+      const preview3dActive = map.view.renderMode === 'preview_3d';
       const isPanKey = ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key) ||
-        (!isTypingTarget(event) && ['w', 'a', 's', 'd'].includes(key));
+        (!isTypingTarget(event) && !preview3dActive && ['w', 'a', 's', 'd'].includes(key));
 
-      if (isPanKey && !isTypingTarget(event)) {
+      if (!preview3dActive && isPanKey && !isTypingTarget(event)) {
         event.preventDefault();
         pressedKeys.current.add(key);
-        const map = selectActiveMap(useAppStore.getState());
         currentPan.current = { x: map.view.pan.x, y: map.view.pan.y };
         targetPan.current = { ...currentPan.current };
         if (!rafRef.current) rafRef.current = requestAnimationFrame(tick);
@@ -125,7 +126,6 @@ export const useHotkeys = () => {
 
       if (key === '=' || key === '+') {
         event.preventDefault();
-        const map = selectActiveMap(useAppStore.getState());
         const next = Math.min(3, map.view.zoom * (1 + ZOOM_KEY_STEP));
         updateMapView({ zoom: next });
         return;
@@ -133,7 +133,6 @@ export const useHotkeys = () => {
 
       if (key === '-' || key === '_') {
         event.preventDefault();
-        const map = selectActiveMap(useAppStore.getState());
         const next = Math.max(0.32, map.view.zoom * (1 - ZOOM_KEY_STEP));
         updateMapView({ zoom: next });
         return;

@@ -12,10 +12,11 @@ import { PMREMGenerator, TextureLoader } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 
 import type { DoorwayOrientation, MapRecord, Point, WallSegment } from '../../models/types';
 import type { TileGrid } from '../../models/tilemap';
+import { getRoomBounds, getRoomFootprint } from '../../lib/floorplan';
 import { useAppStore } from '../../store/useAppStore';
 
 interface MapBounds {
@@ -31,6 +32,7 @@ interface MapBounds {
 interface DoorSlot {
   position: THREE.Vector3;
   orientation: DoorwayOrientation;
+  transitionType: MapRecord['doorways'][number]['transitionType'];
   width: number;
   wallThickness: number;
 }
@@ -59,7 +61,7 @@ interface PreviewSceneRef {
   fpControls: PointerLockControls;
   bounds: MapBounds;
   clampOrbit: () => void;
-  clock: THREE.Clock;
+  clock: { getDelta: () => number };
   keys: Record<string, boolean>;
   fpActive: boolean;
   tileGrid?: TileGrid;
@@ -81,14 +83,27 @@ const FLOOR_SLAB_HEIGHT = 4;
 const CAMERA_HEIGHT = 44;
 const PLAYER_RADIUS = 10;
 const FP_MOVE_SPEED = 220;
+const CORRIDOR_WALL_THICKNESS = 14;
 const FLOOR_TEXTURE_SCALE = 176;
 const WALL_TEXTURE_SCALE = 160;
 
 const gltfLoader = new GLTFLoader();
-const rgbeLoader = new RGBELoader();
+const hdrLoader = new HDRLoader();
 const textureLoader = new TextureLoader();
 const texturePromiseCache = new Map<string, Promise<THREE.Texture | null>>();
 let doorModelPromise: Promise<THREE.Group | null> | null = null;
+
+const createFrameTimer = () => {
+  let lastTime = performance.now();
+  return {
+    getDelta: () => {
+      const currentTime = performance.now();
+      const delta = Math.min(0.1, Math.max(0, (currentTime - lastTime) / 1000));
+      lastTime = currentTime;
+      return delta;
+    },
+  };
+};
 
 const doorwayNormal = (orientation: DoorwayOrientation) => {
   if (orientation === 'north') return { x: 0, z: -1 };
@@ -213,18 +228,21 @@ const buildSurfaceMaterial = (
     if (texture) ownedTextures.push(texture);
   }
 
-  const material = new THREE.MeshStandardMaterial({
+  const materialConfig: THREE.MeshStandardMaterialParameters = {
     color: kind === 'floor' ? 0xc4b5a0 : 0x7f7569,
-    map,
-    normalMap,
-    roughnessMap,
-    aoMap,
-    bumpMap,
-    metalnessMap,
     roughness: kind === 'floor' ? 0.95 : 0.88,
     metalness: 0.04,
     bumpScale: bumpMap ? 0.8 : 0,
-  });
+  };
+
+  if (map) materialConfig.map = map;
+  if (normalMap) materialConfig.normalMap = normalMap;
+  if (roughnessMap) materialConfig.roughnessMap = roughnessMap;
+  if (aoMap) materialConfig.aoMap = aoMap;
+  if (bumpMap) materialConfig.bumpMap = bumpMap;
+  if (metalnessMap) materialConfig.metalnessMap = metalnessMap;
+
+  const material = new THREE.MeshStandardMaterial(materialConfig);
 
   return { material, ownedTextures };
 };
@@ -258,10 +276,11 @@ function computeMapBounds(map: MapRecord): MapBounds {
   }
 
   for (const room of map.floorRooms) {
-    minX = Math.min(minX, room.bounds.x);
-    minZ = Math.min(minZ, room.bounds.y);
-    maxX = Math.max(maxX, room.bounds.x + room.bounds.width);
-    maxZ = Math.max(maxZ, room.bounds.y + room.bounds.height);
+    const bounds = getRoomBounds(room);
+    minX = Math.min(minX, bounds.x);
+    minZ = Math.min(minZ, bounds.y);
+    maxX = Math.max(maxX, bounds.x + bounds.width);
+    maxZ = Math.max(maxZ, bounds.y + bounds.height);
   }
 
   for (const corridor of map.corridors) {
@@ -306,12 +325,14 @@ const isWallTileBlocked = (grid: TileGrid, worldX: number, worldZ: number) => {
 };
 
 const isWalkableFallback = (map: MapRecord, worldX: number, worldZ: number) => {
-  const insideRoom = map.floorRooms.some((room) => (
-    worldX >= room.bounds.x + PLAYER_RADIUS &&
-    worldX <= room.bounds.x + room.bounds.width - PLAYER_RADIUS &&
-    worldZ >= room.bounds.y + PLAYER_RADIUS &&
-    worldZ <= room.bounds.y + room.bounds.height - PLAYER_RADIUS
-  ));
+  const insideRoom = map.floorRooms.some((room) =>
+    getRoomFootprint(room).some((rect) => (
+      worldX >= rect.x + PLAYER_RADIUS &&
+      worldX <= rect.x + rect.width - PLAYER_RADIUS &&
+      worldZ >= rect.y + PLAYER_RADIUS &&
+      worldZ <= rect.y + rect.height - PLAYER_RADIUS
+    )),
+  );
 
   if (insideRoom) return true;
 
@@ -353,6 +374,12 @@ const collidesWithWallSegments = (walls: WallSegment[], worldX: number, worldZ: 
   });
 };
 
+const doorwayUsesBarGate = (transitionType: DoorSlot['transitionType']) =>
+  transitionType === 'gate' || transitionType === 'portcullis';
+
+const corridorEndpointHasDoorway = (point: Point, doorways: MapRecord['doorways']) =>
+  doorways.some((doorway) => Math.hypot(doorway.position.x - point.x, doorway.position.y - point.y) <= Math.max(18, doorway.width * 0.7));
+
 const addFallbackDoorGeometry = (
   doorSlots: DoorSlot[],
   parent: THREE.Group,
@@ -381,15 +408,10 @@ const addFallbackDoorGeometry = (
 
   for (const slot of doorSlots) {
     const group = new THREE.Group();
+    group.userData.transitionType = slot.transitionType;
     const normal = doorwayNormal(slot.orientation);
     const doorHeight = WALL_HEIGHT * 0.76;
     const depth = Math.max(8, slot.wallThickness * 0.65);
-
-    const leaf = new THREE.Mesh(doorLeafGeometry, doorLeafMaterial);
-    leaf.scale.set(slot.width * 0.82, doorHeight, depth);
-    leaf.position.set(0, doorHeight / 2, 0);
-    leaf.castShadow = true;
-    leaf.receiveShadow = true;
 
     const topFrame = new THREE.Mesh(frameGeometry, frameMaterial);
     topFrame.scale.set(slot.width * 1.08, 8, depth * 1.1);
@@ -406,7 +428,25 @@ const addFallbackDoorGeometry = (
     rightFrame.position.set(slot.width * 0.54, (doorHeight + 8) / 2, 0);
     rightFrame.castShadow = true;
 
-    group.add(leaf, topFrame, leftFrame, rightFrame);
+    if (doorwayUsesBarGate(slot.transitionType)) {
+      const barOffsets = [-slot.width * 0.28, 0, slot.width * 0.28];
+      for (const offset of barOffsets) {
+        const bar = new THREE.Mesh(frameGeometry, frameMaterial);
+        bar.scale.set(6, doorHeight, depth * 0.84);
+        bar.position.set(offset, doorHeight / 2, 0);
+        bar.castShadow = true;
+        group.add(bar);
+      }
+    } else {
+      const leaf = new THREE.Mesh(doorLeafGeometry, doorLeafMaterial);
+      leaf.scale.set(slot.width * 0.82, doorHeight, depth);
+      leaf.position.set(0, doorHeight / 2, 0);
+      leaf.castShadow = true;
+      leaf.receiveShadow = true;
+      group.add(leaf);
+    }
+
+    group.add(topFrame, leftFrame, rightFrame);
     group.position.set(
       slot.position.x + normal.x * slot.wallThickness * 0.08,
       0,
@@ -428,7 +468,7 @@ const addDoorModelInstances = (
   const baseWidth = Math.max(size.x, size.z, 1);
   const baseHeight = Math.max(size.y, 1);
 
-  for (const slot of doorSlots) {
+  for (const slot of doorSlots.filter((candidate) => candidate.transitionType === 'door')) {
     const instance = template.clone(true);
     const root = new THREE.Group();
     const normal = doorwayNormal(slot.orientation);
@@ -454,6 +494,75 @@ const addDoorModelInstances = (
     );
     root.rotation.y = doorwayRotationY(slot.orientation);
     parent.add(root);
+  }
+};
+
+const addCorridorWallGeometry = (
+  map: MapRecord,
+  scene: THREE.Scene,
+  wallMaterial: THREE.Material,
+  materialTargets: MaterialTarget[],
+  disposeList: Array<() => void>,
+) => {
+  const addWallMesh = (width: number, thickness: number, centerX: number, centerZ: number, rotationY: number) => {
+    const geometry = new THREE.BoxGeometry(width, WALL_HEIGHT, thickness);
+    ensureUv2(geometry);
+    disposeList.push(() => geometry.dispose());
+
+    const mesh = new THREE.Mesh(geometry, wallMaterial);
+    mesh.position.set(centerX, WALL_HEIGHT / 2, centerZ);
+    mesh.rotation.y = rotationY;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    materialTargets.push({ mesh, kind: 'wall', sizeX: width, sizeY: WALL_HEIGHT });
+  };
+
+  for (const corridor of map.corridors) {
+    const wallThickness = Math.max(10, Math.min(CORRIDOR_WALL_THICKNESS, corridor.width * 0.2));
+    const capWidth = corridor.width + wallThickness * 1.6;
+    const lastSegmentIndex = corridor.points.length - 2;
+
+    for (let index = 0; index < corridor.points.length - 1; index += 1) {
+      const start = corridor.points[index]!;
+      const end = corridor.points[index + 1]!;
+      const dx = end.x - start.x;
+      const dz = end.y - start.y;
+      const length = Math.hypot(dx, dz);
+      if (length < 1) continue;
+
+      const tangentX = dx / length;
+      const tangentZ = dz / length;
+      const normalX = -tangentZ;
+      const normalZ = tangentX;
+      const rotationY = -Math.atan2(dz, dx);
+      const centerX = (start.x + end.x) / 2;
+      const centerZ = (start.y + end.y) / 2;
+      const sideOffset = corridor.width * 0.5 + wallThickness * 0.5 - 1;
+
+      addWallMesh(length + wallThickness, wallThickness, centerX + normalX * sideOffset, centerZ + normalZ * sideOffset, rotationY);
+      addWallMesh(length + wallThickness, wallThickness, centerX - normalX * sideOffset, centerZ - normalZ * sideOffset, rotationY);
+
+      if (index === 0 && !corridorEndpointHasDoorway(start, map.doorways)) {
+        addWallMesh(
+          wallThickness,
+          capWidth,
+          start.x - tangentX * wallThickness * 0.5,
+          start.y - tangentZ * wallThickness * 0.5,
+          rotationY,
+        );
+      }
+
+      if (index === lastSegmentIndex && !corridorEndpointHasDoorway(end, map.doorways)) {
+        addWallMesh(
+          wallThickness,
+          capWidth,
+          end.x + tangentX * wallThickness * 0.5,
+          end.y + tangentZ * wallThickness * 0.5,
+          rotationY,
+        );
+      }
+    }
   }
 };
 
@@ -544,6 +653,7 @@ const buildTileGridScene = (
     doorSlots.push({
       position: new THREE.Vector3(doorway.position.x, 0, doorway.position.y),
       orientation: doorway.orientation,
+      transitionType: doorway.transitionType,
       width: doorway.width,
       wallThickness: Math.max(12, tileSizePx * 0.6),
     });
@@ -560,20 +670,22 @@ const buildFloorplanScene = (
   disposeList: Array<() => void>,
 ) => {
   for (const room of map.floorRooms) {
-    const geometry = new THREE.BoxGeometry(room.bounds.width, FLOOR_SLAB_HEIGHT, room.bounds.height);
-    ensureUv2(geometry);
-    disposeList.push(() => geometry.dispose());
+    for (const rect of getRoomFootprint(room)) {
+      const geometry = new THREE.BoxGeometry(rect.width, FLOOR_SLAB_HEIGHT, rect.height);
+      ensureUv2(geometry);
+      disposeList.push(() => geometry.dispose());
 
-    const mesh = new THREE.Mesh(geometry, floorMaterial);
-    mesh.position.set(
-      room.bounds.x + room.bounds.width / 2,
-      FLOOR_SLAB_HEIGHT / 2,
-      room.bounds.y + room.bounds.height / 2,
-    );
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    scene.add(mesh);
-    materialTargets.push({ mesh, kind: 'floor', sizeX: room.bounds.width, sizeY: room.bounds.height });
+      const mesh = new THREE.Mesh(geometry, floorMaterial);
+      mesh.position.set(
+        rect.x + rect.width / 2,
+        FLOOR_SLAB_HEIGHT / 2,
+        rect.y + rect.height / 2,
+      );
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      materialTargets.push({ mesh, kind: 'floor', sizeX: rect.width, sizeY: rect.height });
+    }
   }
 
   for (const corridor of map.corridors) {
@@ -598,6 +710,8 @@ const buildFloorplanScene = (
       materialTargets.push({ mesh, kind: 'floor', sizeX: length, sizeY: corridor.width });
     }
   }
+
+  addCorridorWallGeometry(map, scene, wallMaterial, materialTargets, disposeList);
 
   for (const wall of map.wallSegments) {
     const [start, end] = wall.points;
@@ -625,6 +739,7 @@ const buildFloorplanScene = (
     doorSlots.push({
       position: new THREE.Vector3(doorway.position.x, 0, doorway.position.y),
       orientation: doorway.orientation,
+      transitionType: doorway.transitionType,
       width: doorway.width,
       wallThickness: 18,
     });
@@ -682,7 +797,7 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 1.08;
       renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       host.appendChild(renderer.domElement);
       disposeList.push(() => renderer.dispose());
@@ -708,6 +823,11 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       orbit.maxDistance = bounds.span * 1.9;
       orbit.minPolarAngle = Math.PI * 0.18;
       orbit.maxPolarAngle = Math.PI * 0.48;
+      orbit.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      };
       orbit.target.set(bounds.cx, 0, bounds.cz);
       orbit.enablePan = true;
 
@@ -733,6 +853,12 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       const fpControls = new PointerLockControls(camera, renderer.domElement);
       fpControls.minPolarAngle = Math.PI * 0.24;
       fpControls.maxPolarAngle = Math.PI * 0.76;
+
+      const preventContextMenu = (event: MouseEvent) => event.preventDefault();
+      host.addEventListener('contextmenu', preventContextMenu);
+      renderer.domElement.addEventListener('contextmenu', preventContextMenu);
+      disposeList.push(() => host.removeEventListener('contextmenu', preventContextMenu));
+      disposeList.push(() => renderer.domElement.removeEventListener('contextmenu', preventContextMenu));
 
       const floorFallbackMaterial = new THREE.MeshStandardMaterial({
         color: 0xc1b39f,
@@ -831,15 +957,19 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
         }
 
         if (doorTemplate) {
-          fallbackDoorGroup.visible = false;
           modelDoorGroup.visible = true;
+          fallbackDoorGroup.traverse((object) => {
+            if (object instanceof THREE.Group && object.userData.transitionType === 'door') {
+              object.visible = false;
+            }
+          });
           addDoorModelInstances(doorTemplate, doorSlots, modelDoorGroup);
         }
       };
 
       void applyAssetMaterials();
 
-      rgbeLoader.load(
+      hdrLoader.load(
         HDRI_PATH,
         (texture) => {
           if (disposed) {
@@ -915,7 +1045,7 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       disposeList.push(() => fpControls.removeEventListener('unlock', onUnlock));
       disposeList.push(() => fpControls.dispose());
 
-      const clock = new THREE.Clock();
+      const clock = createFrameTimer();
       const animate = () => {
         const current = sceneRef.current;
         if (!current) return;
@@ -1014,7 +1144,8 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       for (const id of ids) {
         const room = map.floorRooms.find((entry) => entry.id === id);
         if (room) {
-          expand(room.bounds.x, room.bounds.y, room.bounds.width, room.bounds.height);
+          const bounds = getRoomBounds(room);
+          expand(bounds.x, bounds.y, bounds.width, bounds.height);
           continue;
         }
 
@@ -1074,6 +1205,7 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
       <div
         className="canvas-shell canvas-shell--3d"
         data-testid="map-3d-canvas"
+        onContextMenu={(event) => event.preventDefault()}
         onClick={() => {
           const current = sceneRef.current;
           if (current && fpArmed && !fpLocked) {
@@ -1103,6 +1235,9 @@ export const MapThreePreview = forwardRef<MapThreePreviewHandle, { map: MapRecor
           </div>
           {fpArmed && !fpLocked ? (
             <div className="canvas-3d-overlay__hint">Click in the view to capture mouse. Esc to release.</div>
+          ) : null}
+          {fpLocked ? (
+            <div className="canvas-3d-overlay__hint">WASD moves, mouse looks, Esc releases the camera.</div>
           ) : null}
         </div>
         <div className="canvas-3d-host" ref={containerRef} />

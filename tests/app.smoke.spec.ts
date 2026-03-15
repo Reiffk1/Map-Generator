@@ -57,6 +57,23 @@ async function assertRuntimeHealth(page: Page, runtime: RuntimeTracker) {
   expect.soft(layoutFitsDesktop, 'desktop layout overflow').toBeTruthy();
 }
 
+async function clickWorldPoint(page: Page, point: { x: number; y: number }) {
+  const screenPoint = await page.evaluate((worldPoint) => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    const map = debug.selectActiveMap();
+    return {
+      x: map.view.pan.x + worldPoint.x * map.view.zoom,
+      y: map.view.pan.y + worldPoint.y * map.view.zoom,
+    };
+  }, point);
+
+  const canvasBox = await page.locator('.konvajs-content').boundingBox();
+  if (!canvasBox) throw new Error('Konva canvas not found');
+
+  await page.mouse.click(canvasBox.x + screenPoint.x, canvasBox.y + screenPoint.y);
+}
+
 test('completes the first-run tutorial and captures redesigned desktop states', async ({ page }) => {
   const runtime = await bootApp(page, { tutorial: 'on' });
 
@@ -160,6 +177,124 @@ test('supports explorer search, review flows, and inspector editing', async ({ p
   await page.getByTestId('topbar-more-menu').click();
   await page.getByTestId('toggle-3d-preview').click();
   await expect(page.getByTestId('fit-map-button')).toBeVisible();
+
+  await assertRuntimeHealth(page, runtime);
+});
+
+test('builds a scratch map with snapped doors, chest overlays, and editable notes', async ({ page }) => {
+  const runtime = await bootApp(page, { tutorial: 'off' });
+
+  await page.getByTestId('new-map-button').click();
+  await page.evaluate(async () => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    const store = debug.store.getState();
+    store.addFloorRoom({ x: 336, y: 240, width: 240, height: 168 });
+    store.addCorridor([{ x: 576, y: 324 }, { x: 720, y: 324 }]);
+  });
+
+  await expect(page.getByTestId('map-room-count')).toHaveText('1 rooms');
+  await expect(page.getByTestId('map-corridor-count')).toHaveText('1 corridors');
+
+  const wallStateBeforeDoor = await page.evaluate(async () => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    const map = debug.selectActiveMap();
+    const room = map.floorRooms[0];
+    const roomEdge = room.bounds.x + room.bounds.width;
+    const eastWallLengths = map.wallSegments
+      .map((wall) => {
+        const [start, end] = wall.points;
+        if (!start || !end) return null;
+        if (Math.abs(start.x - roomEdge) > 1 || Math.abs(end.x - roomEdge) > 1) return null;
+        return Math.abs(end.y - start.y);
+      })
+      .filter((length): length is number => length !== null);
+
+    return {
+      doorCount: map.doorways.length,
+      roomHeight: room.bounds.height,
+      eastWallLengths,
+    };
+  });
+
+  expect(wallStateBeforeDoor.doorCount).toBe(0);
+  expect(wallStateBeforeDoor.eastWallLengths.some((length) => length >= wallStateBeforeDoor.roomHeight - 1)).toBeTruthy();
+
+  await page.getByTestId('tool-doorway').click();
+  await expect(page.getByTestId('transition-preset-portcullis')).toBeVisible();
+  await page.getByTestId('transition-preset-portcullis').click();
+
+  const doorwayTarget = await page.evaluate(async () => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    const map = debug.selectActiveMap();
+    return map.corridors[0].points[0]!;
+  });
+  await clickWorldPoint(page, doorwayTarget);
+
+  await expect(page.getByTestId('map-door-count')).toHaveText('1 links');
+
+  const wallStateAfterDoor = await page.evaluate(async () => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    const map = debug.selectActiveMap();
+    const room = map.floorRooms[0];
+    const roomEdge = room.bounds.x + room.bounds.width;
+    const eastWallLengths = map.wallSegments
+      .map((wall) => {
+        const [start, end] = wall.points;
+        if (!start || !end) return null;
+        if (Math.abs(start.x - roomEdge) > 1 || Math.abs(end.x - roomEdge) > 1) return null;
+        return Math.abs(end.y - start.y);
+      })
+      .filter((length): length is number => length !== null);
+
+    return {
+      selectedDoorType: map.doorways[0]?.transitionType,
+      roomHeight: room.bounds.height,
+      eastWallLengths,
+    };
+  });
+
+  expect(wallStateAfterDoor.selectedDoorType).toBe('portcullis');
+  expect(wallStateAfterDoor.eastWallLengths.some((length) => length >= wallStateAfterDoor.roomHeight - 1)).toBeFalsy();
+
+  const tutorialDismiss = page.getByTestId('tutorial-dismiss');
+  if (await tutorialDismiss.count()) {
+    await tutorialDismiss.click();
+  }
+
+  await page.getByTestId('tool-marker').click();
+  await expect(page.getByTestId('marker-preset-chest')).toBeVisible();
+  await page.getByTestId('marker-preset-chest').click();
+  await clickWorldPoint(page, { x: 648, y: 372 });
+
+  const chestMarker = await page.evaluate(async () => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    const map = debug.selectActiveMap();
+    return map.markers.at(-1);
+  });
+
+  expect(chestMarker?.iconId).toBe('chest');
+
+  await page.getByTestId('tool-note').click();
+  await clickWorldPoint(page, { x: 660, y: 468 });
+  await page.getByLabel('Title').last().fill('Route Reminder');
+  await page.getByLabel('Body').last().fill('Portcullis added after the corridor was confirmed.');
+
+  const editedNote = await page.evaluate(async () => {
+    const debug = window.__WAYFINDER_DEBUG__;
+    if (!debug) throw new Error('Wayfinder debug hook unavailable');
+    const store = debug.store.getState();
+    const map = debug.selectActiveMap();
+    const selectedId = store.selection.ids[0];
+    return map.notesBoard.find((note) => note.id === selectedId);
+  });
+
+  expect(editedNote?.title).toBe('Route Reminder');
+  expect(editedNote?.body).toContain('Portcullis added');
 
   await assertRuntimeHealth(page, runtime);
 });

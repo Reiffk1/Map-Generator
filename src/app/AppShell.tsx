@@ -134,7 +134,12 @@ export function AppShell() {
   const routePlan = buildRoutePlan(project, routePlannerStart, routePlannerEnd);
   const hasLeftSidebar = !focusMode && showLeftSidebar && !isCompactLayout;
   const hasRightSidebar = !focusMode && showRightSidebar && !isCompactLayout;
-  const centerPanelDefaultSize = hasLeftSidebar && hasRightSidebar ? 62 : hasLeftSidebar ? 82 : hasRightSidebar ? 80 : 100;
+  const leftSidebarDefaultSize = '16%';
+  const rightSidebarDefaultSize = '16%';
+  const sidebarMinSize = '14%';
+  const sidebarMaxSize = '24%';
+  const centerPanelDefaultSize = hasLeftSidebar && hasRightSidebar ? '68%' : hasLeftSidebar ? '84%' : hasRightSidebar ? '82%' : '100%';
+  const centerPanelMinSize = hasLeftSidebar || hasRightSidebar ? '40%' : '100%';
   // (All modes/tools are rendered in the vertical rail, no primary/secondary split needed)
 
   useEffect(() => {
@@ -478,7 +483,12 @@ export function AppShell() {
       <PanelGroup orientation="horizontal" className={`flex-1 min-h-0 min-w-0 ${focusMode ? 'gap-0' : 'gap-1'}`}>
         {hasLeftSidebar ? (
           <>
-            <ResizablePanel defaultSize={18} minSize={14} maxSize={30} className="min-h-0 h-full">
+            <ResizablePanel
+              defaultSize={leftSidebarDefaultSize}
+              minSize={sidebarMinSize}
+              maxSize={sidebarMaxSize}
+              className="min-h-0 h-full"
+            >
               <LeftSidebar
                 onCreateMap={createMap}
                 onCreateSnapshot={() => createSnapshot('Manual snapshot')}
@@ -491,7 +501,7 @@ export function AppShell() {
           </>
         ) : null}
 
-        <ResizablePanel defaultSize={centerPanelDefaultSize} minSize={40} className="min-h-0">
+        <ResizablePanel defaultSize={centerPanelDefaultSize} minSize={centerPanelMinSize} className="min-h-0">
           <div className="center-panel-shell">
             {!focusMode ? (
             <div className="tool-rail-vertical" data-testid="tool-rail">
@@ -592,9 +602,18 @@ export function AppShell() {
               tabIndex={0}
             >
               {map.view.renderMode === 'preview_3d' ? (
-                <Suspense fallback={<div className="canvas-loading-state">Loading cinematic preview...</div>}>
-                  <MapThreePreview ref={previewRef} map={map} />
-                </Suspense>
+                <div className="preview-workbench">
+                  <Suspense fallback={<div className="canvas-loading-state">Loading cinematic preview...</div>}>
+                    <MapThreePreview ref={previewRef} map={map} />
+                  </Suspense>
+                  <div className="preview-workbench__editor">
+                    <div className="preview-workbench__editor-header">
+                      <strong>Live Edit Surface</strong>
+                      <span>Keep building while the 3D camera stays active.</span>
+                    </div>
+                    <MapCanvas ref={canvasRef} embedded map={map} project={project} />
+                  </div>
+                </div>
               ) : (
                 <MapCanvas ref={canvasRef} map={map} project={project} />
               )}
@@ -602,7 +621,9 @@ export function AppShell() {
               {focusMode ? (
                 <div className="focus-mode-overlay">
                   <button onClick={toggleFocusMode} type="button">Exit Focus</button>
-                  <button disabled={map.view.renderMode !== 'editor_2d'} onClick={handleReset2dView} type="button">Fit to Map</button>
+                  <button onClick={handleReset2dView} type="button">
+                    {map.view.renderMode === 'preview_3d' ? 'Fit Edit Surface' : 'Fit to Map'}
+                  </button>
                   <button disabled={map.view.renderMode !== 'preview_3d'} onClick={handleReset3dCamera} type="button">Reset Camera</button>
                 </div>
               ) : null}
@@ -637,7 +658,12 @@ export function AppShell() {
         {hasRightSidebar ? (
           <>
             <PanelResizeHandle className="w-2 rounded-lg bg-gradient-to-b from-[rgba(196,60,76,0.18)] to-[rgba(196,60,76,0.04)] border border-[rgba(196,60,76,0.24)] hover:from-[rgba(196,60,76,0.32)] hover:to-[rgba(196,60,76,0.08)] hover:border-[rgba(196,60,76,0.42)] transition-colors cursor-col-resize" />
-            <ResizablePanel defaultSize={20} minSize={16} maxSize={32} className="min-h-0 h-full">
+            <ResizablePanel
+              defaultSize={rightSidebarDefaultSize}
+              minSize={sidebarMinSize}
+              maxSize={sidebarMaxSize}
+              className="min-h-0 h-full"
+            >
               <RightSidebar map={map} project={project} />
             </ResizablePanel>
           </>
